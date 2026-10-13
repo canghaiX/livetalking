@@ -4,6 +4,7 @@ import uuid
 from aiohttp import web
 from server.task_manager import task_manager
 from utils.logger import logger
+from server.avatar_package_manager import package_manager, validate_id
 
 def json_ok(data=None):
     body = {"code": 0, "msg": "ok"}
@@ -26,6 +27,8 @@ async def create_avatar_task(request):
     Parameters: model, avatar_id, video_file (upload), video_path (local), ...
     """
     try:
+        if package_manager.restarting:
+            return json_error('服务即将重启，请稍后提交生成任务')
         if request.content_type == 'multipart/form-data':
             reader = await request.multipart()
             params = {}
@@ -37,7 +40,7 @@ async def create_avatar_task(request):
                     break
 
                 if part.name == 'video_file':
-                    filename = part.filename
+                    filename = os.path.basename(part.filename or 'video.mp4')
                     temp_dir = os.path.abspath('./data/tmp')
                     os.makedirs(temp_dir, exist_ok=True)
                     video_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{filename}")
@@ -61,6 +64,9 @@ async def create_avatar_task(request):
 
         if not model_type or not avatar_id:
             return json_error("model and avatar_id are required")
+        validate_id(avatar_id)
+        if model_type not in ('wav2lip', 'musetalk'):
+            return json_error('Unsupported model')
 
         if 'video_path' not in params:
             return json_error("video_file or video_path is required")

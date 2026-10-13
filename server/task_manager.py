@@ -41,11 +41,12 @@ class TaskManager:
         self.tasks = {}
         self.lock = threading.Lock()
 
-    def add_task(self, model_type, avatar_id, params, task_id=None, notify_url=None):
+    def add_task(self, model_type, avatar_id, params, task_id=None, notify_url=None, runner=None):
         if task_id is None:
             task_id = str(uuid.uuid4())
 
         task = AvatarTask(task_id, model_type, avatar_id, params, notify_url)
+        task.runner = runner
         with self.lock:
             self.tasks[task_id] = task
 
@@ -62,6 +63,8 @@ class TaskManager:
             task = self.tasks.get(task_id)
             if not task:
                 return False, "Task not found"
+            if getattr(task, 'runner', None) is not None:
+                return False, '角色包任务由角色包页面管理，不能从单视频接口删除'
 
             if task.status != "pending":
                 return False, f"Task is in {task.status} state, cannot delete"
@@ -86,7 +89,9 @@ class TaskManager:
             def progress_callback(p):
                 task.progress = p
 
-            if task.model_type == "musetalk":
+            if task.runner is not None:
+                task.runner(progress_callback)
+            elif task.model_type == "musetalk":
                 from avatars.musetalk.genavatar import generate_avatar
                 generate_avatar(
                     video_path=task.params['video_path'],

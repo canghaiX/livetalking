@@ -89,6 +89,8 @@ class RTCManager:
                 content_type="application/json",
                 text=json.dumps({"code": -1, "msg": str(e)}),
             )
+        except (ValueError, FileNotFoundError) as e:
+            return web.json_response({'code': -1, 'msg': str(e)}, status=400)
         logger.info('offer sessionid=%s', sessionid)
 
         pc = await self._create_pc_and_answer(

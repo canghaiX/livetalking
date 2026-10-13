@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>角色包 · LiveTalking</title>
+  <link rel="stylesheet" href="/avatar-package.css">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/index.html">LiveTalking</a><nav><a href="/index.html">数字人</a><a href="/avatar.html">单视频生成</a><a href="/avatar-package.html" aria-current="page">角色包</a></nav><span id="serviceState" class="service-state">正在连接</span></header>
+  <main>
+    <div class="page-heading"><div><h1>数字人角色包</h1><p>Wav2Lip 256 <span class="dot">·</span> LiveTalking 水印保留</p></div><button id="newPackage" class="primary">＋ 新建角色包</button></div>
+    <div id="notice" role="status" hidden></div>
+    <div class="workspace">
+      <aside><h2>角色</h2><div id="packageList" class="package-list"></div><div id="emptyList" class="empty">暂无角色包</div></aside>
+      <section class="editor">
+        <div id="emptyEditor" class="empty editor-empty">暂无所选角色</div>
+        <div id="packageEditor" hidden>
+          <div class="package-heading"><div><h2 id="packageName"></h2><span id="packageId" class="muted"></span></div><div class="publish-controls"><span id="completion"></span><button id="publish" class="primary" disabled>发布并重启</button></div></div>
+          <div class="tabs" role="tablist"><button id="materialsTab" role="tab" aria-selected="true">动作素材</button><button id="previewTab" role="tab" aria-selected="false">数字人预览</button></div>
+          <div id="materialsPanel" role="tabpanel">
+            <div class="requirements"><span>MP4 / H.264</span><span>恒定 25fps</span><span>3–15 秒</span><span>720p–1080p</span><span>单文件 ≤100MB</span><span>人脸覆盖率 ≥98%</span></div>
+            <div class="action-header"><span>动作 / 视频</span><span>处理状态</span></div>
+            <div id="actions"></div>
+          </div>
+          <div id="previewPanel" role="tabpanel" hidden>
+            <div class="preview-toolbar"><label>动作<select id="previewAction"></select></label><button id="connect" class="primary">▶ 连接预览</button><button id="disconnect" disabled>■ 断开</button><span id="connectionState">未连接</span></div>
+            <video id="liveVideo" autoplay playsinline muted controls></video><audio id="liveAudio" autoplay></audio>
+            <div class="audio-tools"><label>测试音频<input id="testAudio" type="file" accept="audio/*"></label><button id="sendAudio" disabled>发送音频</button><span id="audioStatus" role="status"></span></div>
+            <span id="sessionInfo" class="muted"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <dialog id="createDialog"><form id="createForm"><div class="dialog-heading"><h2>新建角色包</h2><button type="button" id="closeDialog" class="icon-button" title="关闭" aria-label="关闭">×</button></div><label>角色名称<input name="name" required maxlength="80" placeholder="铁科院讲解员"></label><label>角色 ID<input name="package_id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" placeholder="railway_presenter"></label><h3>动作</h3><div id="draftActions"></div><button id="addAction" type="button">＋ 添加动作</button><p id="createError" class="error" role="alert"></p><div class="dialog-footer"><button id="createSubmit" class="primary" type="submit">创建角色包</button></div></form></dialog>
+  <dialog id="publishDialog"><div class="dialog-heading"><h2>发布角色包</h2></div><p id="publishDescription"></p><p>当前数字人会话会断开。生成任务已完成，素材将保留。</p><div class="dialog-footer"><button id="cancelPublish">取消</button><button id="confirmPublish" class="primary">发布并重启</button></div></dialog>
+  <dialog id="sourceDialog"><div class="dialog-heading"><h2 id="sourceTitle">原始视频</h2><button id="closeSource" class="icon-button" title="关闭" aria-label="关闭">×</button></div><video id="sourceVideo" playsinline controls></video></dialog>
+  <script src="/avatar-package.js" defer></script>
+</body>
+</html>

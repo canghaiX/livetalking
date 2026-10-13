@@ -54,6 +54,8 @@ from utils.logger import logger
 import copy
 import gc
 from dotenv import load_dotenv
+from threading import RLock
+from server.avatar_package_manager import package_manager
 
 
 app = Flask(__name__)
@@ -61,6 +63,7 @@ app = Flask(__name__)
 opt = None
 model = None
 global_avatars = {} # avatar_id: payload
+avatar_cache_lock = RLock()
         
 
 #####webrtc###############################
@@ -78,14 +81,21 @@ def build_avatar_session(sessionid:str, params:dict)->BaseAvatar:
     opt_this.sessionid = sessionid
 
     avatar_id = params.get('avatar',opt.avatar_id) 
+    if opt.model == 'wav2lip':
+        package_manager.preview_allowed(avatar_id)
     opt_this.avatar_id = avatar_id
     ref_audio = params.get('refaudio','') #音色
     ref_text = params.get('reftext','')
     if (avatar_id and avatar_id != opt.avatar_id):
         # Avoid reloading if already cached globally
-        if avatar_id not in global_avatars:
-            global_avatars[avatar_id] = load_avatar(avatar_id)
-        avatar_this = global_avatars[avatar_id]
+        with avatar_cache_lock:
+            if avatar_id not in global_avatars:
+                # Keep the default plus one recent action. Live sessions retain their own arrays.
+                for key in list(global_avatars):
+                    if key != opt.avatar_id:
+                        del global_avatars[key]
+                global_avatars[avatar_id] = load_avatar(avatar_id)
+            avatar_this = global_avatars[avatar_id]
     else:
         # Default avatar loaded at startup
         avatar_this = global_avatars.get(opt.avatar_id)
@@ -126,6 +136,13 @@ def main():
     # 解析命令行参数
     from config import parse_args
     opt = parse_args()
+    if opt.model == 'wav2lip':
+        active_avatar = package_manager.active_avatar()
+        if active_avatar:
+            opt.avatar_id = active_avatar
+        detector_weights = os.environ.get('LIVETALKING_SFD_PATH', 'models/s3fd.pth')
+        if not os.path.isfile(detector_weights):
+            logger.warning('S3FD detector weights missing; package generation unavailable: %s', detector_weights)
 
     # ─── 加载 avatar 插件（触发 @register 注册）──────────────────────
     _avatar_modules = {

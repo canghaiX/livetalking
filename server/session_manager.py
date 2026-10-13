@@ -76,9 +76,13 @@ class SessionManager:
         self.sessions[sessionid] = None
 
         # 在线程池中构建 session（加载模型非常耗时）
-        avatar_session = await asyncio.get_event_loop().run_in_executor(
-            None, self.build_session_fn, sessionid, params
-        )
+        try:
+            avatar_session = await asyncio.get_event_loop().run_in_executor(
+                None, self.build_session_fn, sessionid, params
+            )
+        except BaseException:
+            self.sessions.pop(sessionid, None)
+            raise
         self.sessions[sessionid] = avatar_session
         return sessionid
         

@@ -82,6 +82,7 @@
     <div class="container-fluid px-4">
         <span class="navbar-brand"><i class="bi bi-camera-video-fill me-2"></i>LiveTalking</span>
         <a href="/index-en.html" class="text-white-50 small text-decoration-none me-2">English</a>
+        <a href="/avatar-package.html" class="text-white small">多动作角色包</a>
         <div class="d-flex gap-2">
             <span class="session-badge disconnected" id="statusBadge"><span class="status-dot off"></span>未连接</span>
             <span class="text-white-50 small" id="sessionIdDisplay">SID: -</span>
@@ -132,6 +133,7 @@
                         <div class="col-md-4">
                             <label class="form-label">Avatar ID</label>
                             <input type="text" class="form-control form-control-sm" id="offerAvatar" placeholder="wav2lip256_avatar1">
+                            <select id="packageAction" class="form-select form-select-sm mt-2" aria-label="角色包动作"><option value="">选择角色包动作</option></select>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label">参考音频</label>
@@ -223,6 +225,16 @@
 <script>
 let pc = null;
 let sessionid = null;
+fetch('/api/avatar/packages').then(r => r.json()).then(result => {
+    for (const p of result.data?.packages || []) {
+        for (const a of p.actions.filter(a => a.status === 'completed')) {
+            document.getElementById('packageAction').add(new Option(`${p.name} / ${a.label}`, a.avatar_id));
+        }
+    }
+}).catch(() => {});
+document.getElementById('packageAction').onchange = event => {
+    document.getElementById('offerAvatar').value = event.target.value;
+};
 
 function updateStatus(connected) {
     const badge = document.getElementById('statusBadge');

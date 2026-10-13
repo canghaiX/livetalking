@@ -1,0 +1,32 @@
+ARG BASE_IMAGE=livetalking-main:local
+FROM ${BASE_IMAGE}
+
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.title="LiveTalking" \
+      org.opencontainers.image.source="https://github.com/canghaiX/livetalking" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_ENDPOINT=https://hf-mirror.com \
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4
+
+WORKDIR /opt/livetalking
+COPY requirements.txt /tmp/livetalking-workspace-requirements.txt
+# Unused tools inherited from the local base pin incompatible RTC dependencies.
+RUN python -m pip uninstall -y playwright \
+ && python -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    'wheel==0.45.1' 'cryptography==45.0.7' 'pyopenssl==25.3.0' \
+    -r /tmp/livetalking-workspace-requirements.txt \
+ && python -m pip check
+
+COPY . /opt/livetalking
+RUN python -c "import app; import avatars.wav2lip_avatar; import tts.edge" \
+ && python -m pip freeze > /opt/livetalking/requirements.installed.txt
+
+EXPOSE 8020
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/api/admin/config', timeout=4)"
+ENTRYPOINT ["python", "app.py"]
+CMD ["--config", "deployment/config.yaml"]

@@ -16,6 +16,9 @@ models_urls = {
 class SFDDetector(FaceDetector):
     def __init__(self, device, path_to_detector=os.path.join(os.path.dirname(os.path.abspath(__file__)), 's3fd.pth'), verbose=False):
         super(SFDDetector, self).__init__(device, verbose)
+        local_weights = os.environ.get('LIVETALKING_SFD_PATH', './models/s3fd.pth')
+        if not os.path.isfile(path_to_detector) and os.path.isfile(local_weights):
+            path_to_detector = local_weights
 
         # Initialise the face detector
         if not os.path.isfile(path_to_detector):

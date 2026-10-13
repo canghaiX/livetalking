@@ -47,7 +47,7 @@ def get_smoothened_boxes(boxes, T):
 		boxes[i] = np.mean(window, axis=0)
 	return boxes
 
-def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=96, pads=[0, 10, 0, 0], nosmooth=False, face_det_batch_size=16, progress_callback=None):
+def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=96, pads=[0, 10, 0, 0], nosmooth=False, face_det_batch_size=16, progress_callback=None, validated_boxes=None):
     """
     生成avatar的核心逻辑
 
@@ -67,6 +67,37 @@ def generate_avatar(video_path, avatar_id, save_path='./data/avatars', img_size=
     coords_path = os.path.join(avatar_path, "coords.pkl")
 
     osmakedirs([avatar_path, full_imgs_path, face_imgs_path])
+
+    if validated_boxes is not None:
+        # Package validation already detected all faces. Export incrementally to bound memory.
+        boxes = np.asarray(validated_boxes, dtype=np.int32)
+        if not nosmooth:
+            boxes = get_smoothened_boxes(boxes.copy(), T=5)
+        cap = cv2.VideoCapture(video_path)
+        coords = []
+        try:
+            for index, box in enumerate(boxes):
+                ok, frame = cap.read()
+                if not ok:
+                    raise ValueError(f'第 {index + 1} 帧无法解码')
+                x1, y1, x2, y2 = map(int, box)
+                top, bottom, left, right = pads
+                y1, y2 = max(0, y1 - top), min(frame.shape[0], y2 + bottom)
+                x1, x2 = max(0, x1 - left), min(frame.shape[1], x2 + right)
+                if x2 <= x1 or y2 <= y1:
+                    raise ValueError(f'第 {index + 1} 帧人脸裁剪区域无效')
+                face = cv2.resize(frame[y1:y2, x1:x2], (img_size, img_size))
+                cv2.putText(frame, 'LiveTalking', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, .3, (128,128,128), 1)
+                if not cv2.imwrite(f'{full_imgs_path}/{index:08d}.png', frame) or not cv2.imwrite(f'{face_imgs_path}/{index:08d}.png', face):
+                    raise OSError('无法保存 Avatar 图片，请检查磁盘空间')
+                coords.append((y1, y2, x1, x2))
+                if progress_callback:
+                    progress_callback(int((index + 1) / len(boxes) * 100))
+        finally:
+            cap.release()
+        with open(coords_path, 'wb') as output:
+            pickle.dump(coords, output)
+        return
 
     if progress_callback: progress_callback(5)
 

@@ -40,6 +40,7 @@ AUDIO_TIME_BASE = fractions.Fraction(1, SAMPLE_RATE)
 from aiortc import (
     MediaStreamTrack,
 )
+from aiortc.mediastreams import MediaStreamError
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -109,6 +110,8 @@ class PlayerStreamTrack(MediaStreamTrack):
             return self._timestamp, AUDIO_TIME_BASE
 
     async def recv(self) -> Union[Frame, Packet]:
+        if self.readyState != 'live':
+            raise MediaStreamError
         # frame = self.frames[self.counter % 30]            
         self._player._start(self)
         # if self.kind == 'video':
@@ -127,6 +130,8 @@ class PlayerStreamTrack(MediaStreamTrack):
         #             frame = await self._queue.get()
         #     else:
         while True:
+            if self.readyState != 'live':
+                raise MediaStreamError
             try:
                 frame, eventpoint = self._queue.get_nowait()
                 break
@@ -190,14 +195,23 @@ class HumanPlayer:
     def push_video(self, frame):
         from av import VideoFrame
         new_frame = VideoFrame.from_ndarray(frame, format="bgr24")
-        self.__video._queue.put((new_frame, None))
+        self._push_frame(self.__video, new_frame)
 
     def push_audio(self, frame, eventpoint=None):
         from av import AudioFrame
         new_frame = AudioFrame(format='s16', layout='mono', samples=frame.shape[0])
         new_frame.planes[0].update(frame.tobytes())
         new_frame.sample_rate = 16000
-        self.__audio._queue.put((new_frame, eventpoint))
+        self._push_frame(self.__audio, new_frame, eventpoint)
+
+    def _push_frame(self, track, frame, eventpoint=None):
+        # Closing a peer stops consumption. A full queue must not trap the render thread.
+        while track.readyState == 'live' and not (self.__thread_quit and self.__thread_quit.is_set()):
+            try:
+                track._queue.put((frame, eventpoint), timeout=.1)
+                return
+            except queue.Full:
+                continue
 
     def get_buffer_size(self) -> int:
         return self.__video._queue.qsize()
@@ -241,7 +255,9 @@ class HumanPlayer:
         if not self.__started and self.__thread is not None:
             self.__log_debug("Stopping worker thread")
             self.__thread_quit.set()
-            self.__thread.join()
+            thread = self.__thread
+            # aiortc invokes stop on the event loop. Reap the worker away from that loop.
+            threading.Thread(target=thread.join, name='media-player-cleanup', daemon=True).start()
             self.__thread = None
 
         if not self.__started and self.__container is not None:

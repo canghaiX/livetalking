@@ -2,11 +2,15 @@
 set -euo pipefail
 deployment_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(dirname -- "$deployment_dir")"
+if [[ ! -s "$project_dir/data/tts/zh_CN-huayan-medium.onnx" || \
+      ! -s "$project_dir/data/tts/zh_CN-huayan-medium.onnx.json" ]]; then
+    "$deployment_dir/download_piper_voice.sh"
+fi
 if docker container inspect livetalking >/dev/null 2>&1; then
     docker start livetalking
     exit 0
 fi
-mkdir -p "$project_dir/data/record" "$project_dir/data/avatar_packages" "$project_dir/data/avatars"
+mkdir -p "$project_dir/data/record" "$project_dir/data/avatar_packages" "$project_dir/data/avatars" "$project_dir/data/tts"
 docker run -d \
     --name livetalking \
     --gpus device=0 \
@@ -24,4 +28,5 @@ docker run -d \
     -v "$project_dir/data/record:/opt/livetalking/data/record" \
     -v "$project_dir/data/avatar_packages:/opt/livetalking/data/avatar_packages" \
     -v "$project_dir/data/avatars:/opt/livetalking/data/avatars" \
+    -v "$project_dir/data/tts:/opt/livetalking/data/tts" \
     livetalking:latest

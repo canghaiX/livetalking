@@ -20,6 +20,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && python -c "import aiohttp, aiortc, openai"
 
+RUN python -m pip install --no-cache-dir 'piper-tts[zh]==1.8.0'
+
 COPY . /opt/livetalking
 RUN python -c "import app; import avatars.wav2lip_avatar; import tts.edge" \
  && python -m pip freeze > /opt/livetalking/requirements.installed.txt

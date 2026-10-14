@@ -10,7 +10,11 @@ Docker 部署从 `deployment/config.yaml` 读取 `llm_provider: deepseek` 和 `l
 
 动作标签跟随 TTS 音频帧进入 Wav2Lip 推理队列，在同一 WebRTC 会话内切换。切换使用按需帧解码和有限缓存，并在视频渲染端做约 240ms 的交叉淡化。未知标签、动作缺失或 API 失败会回退到默认讲解动作；对话历史只保留最近六轮消息。
 
-当前服务器的出口代理使用自签名证书，因此 `deployment/secrets.env` 设置了 `DEEPSEEK_TLS_VERIFY=0`。在有正规 CA 的部署环境中应删除该设置或改为 `1`。EdgeTTS 仍依赖微软语音服务，网络不可用时可使用音频上传驱动或配置其他 TTS。
+当前服务器的出口代理使用自签名证书，因此 `deployment/secrets.env` 设置了 `DEEPSEEK_TLS_VERIFY=0`。在有正规 CA 的部署环境中应删除该设置或改为 `1`。
+
+### 讲解员语音
+
+默认在线音色为 `zh-CN-XiaoxiaoNeural`。Edge TTS 不可用时，服务使用本地 Piper `zh_CN-huayan-medium` 普通话女声；模型保存在被 Git 忽略的 `data/tts/` 中，并随容器挂载。`deployment/start.sh` 在首次启动时会下载并校验 Piper Voice 模型。模型来自 Piper Voices 的 MIT 许可模型集，SHA-256 为 `9929917bf8cabb26fd528ea44d3a6699c11e87317a14765312420be230be0f3d`。当前网络如有自签名代理证书，可在确认代理可信后用 `CURL_INSECURE=1 deployment/download_piper_voice.sh` 下载。Piper 也不可用时，才会回退到系统基础语音。
 
 ## 素材要求
 

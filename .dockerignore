@@ -11,6 +11,7 @@ deployment/requirements.installed.txt
 deployment/webrtc-smoke-test.py
 data/record
 data/uploads
+data/tts
 models/*.download
 models/*.mirror
 deployment/test-*

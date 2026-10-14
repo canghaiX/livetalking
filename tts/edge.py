@@ -1,21 +1,29 @@
 import time
 import asyncio
+import os
 import subprocess
+import threading
+import wave
 import numpy as np
 import resampy
 import soundfile as sf
 import edge_tts
 from io import BytesIO
+from pathlib import Path
 
 from utils.logger import logger
 from .base_tts import BaseTTS, State
 from registry import register
 
+_PIPER_VOICE = None
+_PIPER_LOCK = threading.Lock()
+
+
 @register("tts", "edgetts")
 class EdgeTTS(BaseTTS):
     def txt_to_audio(self,msg:tuple[str, dict]):
         text,textevent = msg
-        voice = self.opt.REF_FILE or "zh-CN-YunxiaNeural" 
+        voice = self.opt.REF_FILE or "zh-CN-XiaoxiaoNeural"
         voicename = textevent.get('tts', {}).get('ref_file',voice) #self.opt.REF_FILE #"zh-CN-YunxiaNeural"
         t = time.time()
         asyncio.new_event_loop().run_until_complete(self.__main(voicename,text))
@@ -45,11 +53,26 @@ class EdgeTTS(BaseTTS):
         self.input_stream.truncate() 
 
     def _local_tts(self, text, textevent):
-        result = subprocess.run(
-            ['espeak-ng', '-v', 'cmn', '-s', '155', '--stdout', text],
-            check=True, capture_output=True, timeout=30,
-        )
-        audio, sample_rate = sf.read(BytesIO(result.stdout), dtype='float32')
+        model_path = Path(os.getenv(
+            'LIVETALKING_PIPER_VOICE',
+            './data/tts/zh_CN-huayan-medium.onnx',
+        ))
+        try:
+            if not model_path.is_file():
+                raise FileNotFoundError(f'Piper voice model not found: {model_path}')
+            voice = self._get_piper_voice(model_path)
+            audio_buffer = BytesIO()
+            with wave.open(audio_buffer, 'wb') as output:
+                voice.synthesize_wav(text, output)
+            audio, sample_rate = sf.read(BytesIO(audio_buffer.getvalue()), dtype='float32')
+            logger.info('Piper Mandarin female voice synthesized the response')
+        except Exception as exc:
+            logger.warning('Piper TTS unavailable, using basic local voice: %s', exc)
+            result = subprocess.run(
+                ['espeak-ng', '-v', 'cmn', '-s', '155', '--stdout', text],
+                check=True, capture_output=True, timeout=30,
+            )
+            audio, sample_rate = sf.read(BytesIO(result.stdout), dtype='float32')
         if audio.ndim > 1:
             audio = audio[:, 0]
         if sample_rate != self.sample_rate:
@@ -70,6 +93,16 @@ class EdgeTTS(BaseTTS):
                 event.update(status='end', text=text)
             self.parent.put_audio_frame(frame, event)
         logger.info('Local Mandarin TTS generated %d audio frames', (total + self.chunk - 1) // self.chunk)
+
+    @staticmethod
+    def _get_piper_voice(model_path):
+        global _PIPER_VOICE
+        if _PIPER_VOICE is None:
+            with _PIPER_LOCK:
+                if _PIPER_VOICE is None:
+                    from piper import PiperVoice
+                    _PIPER_VOICE = PiperVoice.load(str(model_path), use_cuda=False)
+        return _PIPER_VOICE
 
     def __create_bytes_stream(self,byte_stream):
         #byte_stream=BytesIO(buffer)

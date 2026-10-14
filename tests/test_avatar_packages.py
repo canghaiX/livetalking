@@ -130,6 +130,7 @@ class PackageTests(unittest.TestCase):
     def test_create_and_publish_incomplete(self):
         package = self.manager.create('railway','讲解员')
         self.assertEqual(len(package['actions']),5)
+        self.assertEqual(package['default_action'], 'welcome_smile')
         with self.assertRaises(ValueError): self.manager.create('railway','重复')
         with self.assertRaises(ValueError): self.manager.publish('railway')
         with self.assertRaises(ValueError): self.manager.create('wrong','错误',[])

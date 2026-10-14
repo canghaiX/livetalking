@@ -66,7 +66,7 @@ for _ in range(30):
         time.sleep(1)
 else:
     raise AssertionError('Service did not recover after publication')
-assert config['avatar_id'] == PACKAGE + '__neutral_explain', config
+assert config['avatar_id'] == PACKAGE + '__welcome_smile', config
 package = api(f'/api/avatar/package/{PACKAGE}')
 assert package['published'] and all(a['status']=='completed' for a in package['actions'])
 print(json.dumps({'five_actions':'completed','five_webrtc_audio_tests':'passed',

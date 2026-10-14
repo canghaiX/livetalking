@@ -101,8 +101,9 @@ class PackageManager:
                 raise ValueError('服务即将重启')
             if self._path(package_id).exists():
                 raise ValueError('角色包 ID 已存在，请使用新的 ID')
+            default_action = 'welcome_smile' if 'welcome_smile' in ids else 'neutral_explain'
             package = dict(schema_version=1, package_id=package_id, name=name.strip(), model='wav2lip',
-                           img_size=256, fps=25, default_action='neutral_explain', published=False,
+                           img_size=256, fps=25, default_action=default_action, published=False,
                            actions=items, created_at=time.time())
             self._save(package)
             return package
@@ -213,7 +214,7 @@ class PackageManager:
             atomic_json(self.root / package_id / 'manifest.json', package)
             self._save(package)
             atomic_json(self.root / 'active.json', dict(package_id=package_id,
-                        avatar_id=self.action(package, 'neutral_explain')['avatar_id']))
+                        avatar_id=self.action(package, package['default_action'])['avatar_id']))
             self.restarting = restart
             return package
 

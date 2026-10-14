@@ -54,7 +54,7 @@ class EmotionMappingTests(unittest.TestCase):
             manager._save(package)
             self.assertEqual(manager.emotion_avatar_id("welcome"), "railway__welcome_smile")
             self.assertEqual(manager.emotion_avatar_id("serious"), "railway__serious_emphasis")
-            self.assertEqual(manager.emotion_avatar_id("closing"), "railway__neutral_explain")
+            self.assertEqual(manager.emotion_avatar_id("closing"), "railway__welcome_smile")
 
 
 if __name__ == "__main__":

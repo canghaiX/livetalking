@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+deployment/secrets.env
 __pycache__
 **/__pycache__
 *.log

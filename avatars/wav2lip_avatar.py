@@ -27,10 +27,11 @@ import time
 import cv2
 import glob
 import pickle
+from collections import OrderedDict
 
 import queue
 from queue import Queue
-from threading import Thread, Event
+from threading import Event, RLock, Thread
 import torch.multiprocessing as mp
 
 from avatars.audio_features.mel import MelASR
@@ -69,7 +70,32 @@ def load_model(path):
     model = model.to(device)
     return model.eval()
 
-def load_avatar(avatar_id):
+class LazyFrameCycle:
+    """Decode full-resolution frames on demand so emotion actions use bounded RAM."""
+    def __init__(self, paths, cache_size=12):
+        self.paths = paths
+        self.cache_size = cache_size
+        self.cache = OrderedDict()
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(len(self)))]
+        index %= len(self.paths)
+        frame = self.cache.pop(index, None)
+        if frame is None:
+            frame = cv2.imread(self.paths[index])
+            if frame is None:
+                raise ValueError(f"Unable to read avatar frame: {self.paths[index]}")
+        self.cache[index] = frame
+        while len(self.cache) > self.cache_size:
+            self.cache.popitem(last=False)
+        return frame
+
+
+def load_avatar(avatar_id, lazy_full=False):
     avatar_path = f"./data/avatars/{avatar_id}"
     full_imgs_path = f"{avatar_path}/full_imgs" 
     face_imgs_path = f"{avatar_path}/face_imgs" 
@@ -77,10 +103,9 @@ def load_avatar(avatar_id):
     
     with open(coords_path, 'rb') as f:
         coord_list_cycle = pickle.load(f)
-    frame_list_cycle = None
     input_img_list = glob.glob(os.path.join(full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
     input_img_list = sorted(input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
-    frame_list_cycle = read_imgs(input_img_list)
+    frame_list_cycle = LazyFrameCycle(input_img_list) if lazy_full else read_imgs(input_img_list)
     input_face_list = glob.glob(os.path.join(face_imgs_path, '*.[jpJP][pnPN]*[gG]'))
     input_face_list = sorted(input_face_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
     face_list_cycle = read_imgs(input_face_list)
@@ -109,18 +134,45 @@ class LipReal(BaseAvatar):
         self.model = model
 
         self.frame_list_cycle,self.face_list_cycle,self.coord_list_cycle = avatar
+        self.default_avatar_payload = avatar
+        self._action_avatar_cache = OrderedDict()
+        self._action_avatar_lock = RLock()
 
         self.asr = MelASR(opt,self)
         self.asr.warm_up()
     
-    def inference_batch(self, index, audiofeat_batch):
+    def prepare_avatar_action(self, avatar_id):
+        from server.avatar_package_manager import package_manager
+
+        if avatar_id == self.opt.avatar_id:
+            return
+        if not package_manager.is_active_avatar(avatar_id):
+            raise ValueError("动作不属于当前已发布角色包")
+        with self._action_avatar_lock:
+            if avatar_id in self._action_avatar_cache:
+                self._action_avatar_cache.move_to_end(avatar_id)
+                return
+            self._action_avatar_cache[avatar_id] = load_avatar(avatar_id, lazy_full=True)
+            while len(self._action_avatar_cache) > 4:
+                self._action_avatar_cache.popitem(last=False)
+
+    def avatar_payload_for(self, avatar_id):
+        if not avatar_id or avatar_id == self.opt.avatar_id:
+            return self.default_avatar_payload
+        self.prepare_avatar_action(avatar_id)
+        with self._action_avatar_lock:
+            self._action_avatar_cache.move_to_end(avatar_id)
+            return self._action_avatar_cache[avatar_id]
+
+    def inference_batch(self, index, audiofeat_batch, avatar_payload=None):
         # 这里的 index 是针对当前 avatar 的索引
         # 返回一个 batch 的推理结果，batch 大小由 self.batch_size 决定
-        length = len(self.face_list_cycle)
+        face_list = avatar_payload[1] if avatar_payload else self.face_list_cycle
+        length = len(face_list)
         img_batch = []
-        for i in range(self.batch_size):
+        for i in range(len(audiofeat_batch)):
             idx = mirror_index(length, index + i)
-            face = self.face_list_cycle[idx]
+            face = face_list[idx]
             img_batch.append(face)
         img_batch, audiofeat_batch = np.asarray(img_batch), np.asarray(audiofeat_batch)
 
@@ -138,9 +190,10 @@ class LipReal(BaseAvatar):
         pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
         return pred
 
-    def paste_back_frame(self,pred_frame,idx:int):
-        bbox = self.coord_list_cycle[idx]
-        combine_frame = self.frame_list_cycle[idx].copy()
+    def paste_back_frame(self,pred_frame,idx:int,avatar_payload=None):
+        frame_list, _, coord_list = avatar_payload or self.default_avatar_payload
+        bbox = coord_list[idx]
+        combine_frame = frame_list[idx].copy()
         y1, y2, x1, x2 = bbox
         res_frame = cv2.resize(pred_frame.astype(np.uint8),(x2-x1,y2-y1))
         combine_frame[y1:y2, x1:x2] = res_frame

@@ -227,6 +227,40 @@ class PackageManager:
             raise ValueError('活动角色尚未发布')
         return self.action(package, package['default_action'])['avatar_id']
 
+    def is_active_avatar(self, avatar_id):
+        with self.lock:
+            path = self.root / 'active.json'
+            if not path.is_file():
+                return False
+            active = json.loads(path.read_text())
+            package = self.get(active['package_id'])
+            if not package['published']:
+                return False
+            return any(a['avatar_id'] == avatar_id and a['status'] == 'completed'
+                       for a in package['actions'])
+
+    def emotion_avatar_id(self, emotion):
+        action_for_emotion = {
+            'neutral': 'neutral_explain',
+            'welcome': 'welcome_smile',
+            'serious': 'serious_emphasis',
+            'closing': 'closing_thanks',
+        }
+        with self.lock:
+            path = self.root / 'active.json'
+            if not path.is_file():
+                return None
+            active = json.loads(path.read_text())
+            package = self.get(active['package_id'])
+            if not package['published']:
+                return active.get('avatar_id')
+            action_id = action_for_emotion.get(emotion, package['default_action'])
+            action = next((a for a in package['actions']
+                           if a['id'] == action_id and a['status'] == 'completed'), None)
+            if action is None:
+                action = self.action(package, package['default_action'])
+            return action['avatar_id']
+
     def preview_allowed(self, avatar_id):
         if '__' not in avatar_id:
             validate_id(avatar_id)

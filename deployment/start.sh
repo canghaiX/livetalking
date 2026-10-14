@@ -14,6 +14,7 @@ docker run -d \
     --restart unless-stopped \
     --init \
     --shm-size 1g \
+    --env-file "$deployment_dir/secrets.env" \
     --log-opt max-size=20m --log-opt max-file=3 \
     -e CUDA_VISIBLE_DEVICES=0 \
     -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \

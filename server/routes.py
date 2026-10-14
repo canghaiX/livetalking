@@ -62,9 +62,12 @@ async def human(request):
         elif params['type'] == 'chat':
             llm_response = request.app.get("llm_response")
             if llm_response:
-                asyncio.get_event_loop().run_in_executor(
+                answer = await asyncio.get_event_loop().run_in_executor(
                     None, llm_response, params['text'], avatar_session, datainfo
                 )
+                if answer:
+                    return json_ok({'answer': answer})
+                return json_error("LLM 暂时无法回复，请检查模型服务配置")
 
         return json_ok()
     except Exception as e:

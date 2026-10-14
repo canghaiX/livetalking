@@ -14,12 +14,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /opt/livetalking
 COPY requirements.txt /tmp/livetalking-workspace-requirements.txt
-# Unused tools inherited from the local base pin incompatible RTC dependencies.
-RUN python -m pip uninstall -y playwright \
- && python -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    'wheel==0.45.1' 'cryptography==45.0.7' 'pyopenssl==25.3.0' \
-    -r /tmp/livetalking-workspace-requirements.txt \
- && python -m pip check
+# The local CUDA base provides the runtime dependencies; avoid changing its CUDA stack.
+RUN python -c "import aiohttp, aiortc, openai"
 
 COPY . /opt/livetalking
 RUN python -c "import app; import avatars.wav2lip_avatar; import tts.edge" \

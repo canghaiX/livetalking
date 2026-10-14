@@ -24,3 +24,4 @@ dist
 !.env.example
 deployment/test-*.png
 deployment/requirements.installed.txt
+deployment/secrets.env

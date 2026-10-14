@@ -2,7 +2,15 @@
 
 页面：`http://222.30.145.22:8020/avatar-package.html`。仅支持当前 Wav2Lip 256 模型。
 
-每个角色包保存同一人物的不同动作。各动作独立生成 `full_imgs`、`face_imgs` 和 `coords.pkl`，使用同一个口型模型，不重新训练。动作预览通过关闭旧 WebRTC 会话、向 `/offer` 提交新 `avatar` 并重新连接实现；不支持会话内无缝切换或 LLM 自动调度。
+每个角色包保存同一人物的不同动作。各动作独立生成 `full_imgs`、`face_imgs` 和 `coords.pkl`，使用同一个口型模型，不重新训练。页面预览通过关闭旧 WebRTC 会话、向 `/offer` 提交新 `avatar` 并重新连接实现；对话播报时则可在同一个会话内按句子自动调度已发布动作。
+
+## DeepSeek 对话和动作调度
+
+Docker 部署从 `deployment/config.yaml` 读取 `llm_provider: deepseek` 和 `llm_model: deepseek-flash`。密钥只放在本机忽略的 `deployment/secrets.env`，由 `deployment/start.sh` 注入。首页选择“Chat LLM”后，`/human` 会结合当前会话历史生成中文回答；模型按完整句子返回 `neutral`、`welcome`、`serious`、`closing` 四种受限情绪，服务端将它们映射到已发布角色包的四个动作。
+
+动作标签跟随 TTS 音频帧进入 Wav2Lip 推理队列，在同一 WebRTC 会话内切换。切换使用按需帧解码和有限缓存，并在视频渲染端做约 240ms 的交叉淡化。未知标签、动作缺失或 API 失败会回退到默认讲解动作；对话历史只保留最近六轮消息。
+
+当前服务器的出口代理使用自签名证书，因此 `deployment/secrets.env` 设置了 `DEEPSEEK_TLS_VERIFY=0`。在有正规 CA 的部署环境中应删除该设置或改为 `1`。EdgeTTS 仍依赖微软语音服务，网络不可用时可使用音频上传驱动或配置其他 TTS。
 
 ## 素材要求
 

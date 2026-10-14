@@ -179,6 +179,7 @@
                         <button class="btn-primary-custom btn-sm ms-auto" onclick="sendText()"><i class="bi bi-send"></i> 发送</button>
                         <button class="btn-outline-custom btn-sm" onclick="interrupt()"><i class="bi bi-stop-circle"></i> 打断</button>
                     </div>
+                    <div id="txtResult" class="small text-muted mt-2" aria-live="polite"></div>
                 </div>
             </div>
 
@@ -339,6 +340,8 @@ function sendText() {
     const type = document.getElementById('txtType').value;
     const interrupt = document.getElementById('txtInterrupt').checked;
     if (!text || !sessionid) return alert('请先连接 WebRTC');
+    const result = document.getElementById('txtResult');
+    result.textContent = type === 'chat' ? '正在思考并准备播报…' : '正在播报…';
 
     fetch('/human', {
         method: 'POST',
@@ -346,8 +349,13 @@ function sendText() {
         body: JSON.stringify({ text, type, interrupt, sessionid: String(sessionid) }),
     }).then(r => r.json()).then(d => {
         console.log('human:', d);
+        if (d.code === 0 && d.data && d.data.answer) {
+            result.textContent = d.data.answer;
+        } else if (d.code !== 0) {
+            result.textContent = d.msg || '请求失败';
+        }
         document.getElementById('txtMessage').value = '';
-    });
+    }).catch(error => { result.textContent = error.message || '请求失败'; });
 }
 
 // ─── Audio Upload ──────────────────────────────────────────

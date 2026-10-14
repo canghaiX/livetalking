@@ -30,7 +30,7 @@ import glob
 import resampy
 import queue
 from queue import Queue
-from threading import Thread, Event
+from threading import Event, Lock, Thread
 from io import BytesIO
 import soundfile as sf
 import asyncio
@@ -79,6 +79,8 @@ class BaseAvatar:
         self.custom_audio_index = {}
         self.custom_index = {}
         self.msgqueues = []
+        self.llm_dialog_lock = Lock()
+        self.llm_history = []
         # self.custom_opt = {}
         self.__loadcustom()
 
@@ -326,6 +328,8 @@ class BaseAvatar:
     def inference(self, quit_event):
         length = self.get_avatar_length()
         index = 0
+        active_avatar_id = self.opt.avatar_id
+        supports_action_switch = callable(getattr(self, 'avatar_payload_for', None))
         count = 0
         counttime = 0
         last_speaking = False
@@ -352,6 +356,60 @@ class BaseAvatar:
 
              # 检测状态变化
             current_speaking = not is_all_silence
+
+            if supports_action_switch:
+                frame_count = min(len(audiofeat_batch), self.batch_size)
+                frame_actions = []
+                for i in range(frame_count):
+                    pair = audio_frames[i*2:i*2+2]
+                    marker = next((frame.userdata.get('avatar_action') for frame in pair
+                                   if frame.userdata.get('avatar_action')), None)
+                    if marker:
+                        active_avatar_id = marker
+                    frame_actions.append(active_avatar_id)
+
+                groups = []
+                start = 0
+                while start < frame_count:
+                    end = start + 1
+                    while end < frame_count and frame_actions[end] == frame_actions[start]:
+                        end += 1
+                    groups.append((start, end, frame_actions[start]))
+                    start = end
+
+                if current_speaking and current_speaking != last_speaking and self.custom_index.get(1) is not None:
+                    index = 0
+                for start, end, action_id in groups:
+                    try:
+                        payload = self.avatar_payload_for(action_id)
+                    except (ValueError, FileNotFoundError, OSError) as exc:
+                        logger.warning("Avatar action %s unavailable; using default: %s", action_id, exc)
+                        active_avatar_id = self.opt.avatar_id
+                        payload = self.avatar_payload_for(self.opt.avatar_id)
+                    action_length = len(payload[0])
+                    if current_speaking:
+                        started = time.perf_counter()
+                        predictions = self.inference_batch(
+                            index + start, audiofeat_batch[start:end], avatar_payload=payload
+                        )
+                        counttime += time.perf_counter() - started
+                        count += end - start
+                    else:
+                        predictions = [None] * (end - start)
+                    for offset, prediction in enumerate(predictions, start):
+                        idx = mirror_index(action_length, index + offset)
+                        self.res_frame_queue.put((prediction, audio_frames[offset*2:offset*2+2], idx, payload))
+                if count >= 100:
+                    logger.info(f"------actual avg infer fps:{count/counttime:.4f}")
+                    count = 0
+                    counttime = 0
+                index += frame_count
+                if current_speaking != last_speaking:
+                    logger.info("inference 状态切换：%s → %s",
+                                '说话' if last_speaking else '静音',
+                                '说话' if current_speaking else '静音')
+                    last_speaking = current_speaking
+                continue
 
             if is_all_silence: #全为静音数据，只需要取fullimg，不需要推理
                 for i in range(self.batch_size):
@@ -385,6 +443,11 @@ class BaseAvatar:
         
         _last_speaking = False
         _transition_start = time.time()
+        current_avatar_payload = None
+        last_output_frame = None
+        avatar_transition_from = None
+        avatar_transition_frames = 0
+        avatar_transition_total = 6
         if enable_transition:
             _transition_duration = 0.1  # 过渡时间
             _last_silent_frame = None  # 静音帧缓存
@@ -395,7 +458,9 @@ class BaseAvatar:
         while not quit_event.is_set():
             try:
                 audio_frames: list[AudioFrameData]
-                res_frame,audio_frames,idx = self.res_frame_queue.get(block=True, timeout=1)
+                item = self.res_frame_queue.get(block=True, timeout=1)
+                res_frame, audio_frames, idx = item[:3]
+                avatar_payload = item[3] if len(item) > 3 else None
             except queue.Empty:
                 continue
             
@@ -406,6 +471,12 @@ class BaseAvatar:
                 _transition_start = time.time()
             _last_speaking = current_speaking
 
+            if avatar_payload is not None and avatar_payload is not current_avatar_payload:
+                if current_avatar_payload is not None and last_output_frame is not None:
+                    avatar_transition_from = last_output_frame.copy()
+                    avatar_transition_frames = avatar_transition_total
+                current_avatar_payload = avatar_payload
+
             if audio_frames[0].type!=0 and audio_frames[1].type!=0: #全为静音数据，只需要取fullimg
                 self.speaking = False
                 audiotype = audio_frames[0].type
@@ -414,7 +485,8 @@ class BaseAvatar:
                     target_frame = self.custom_img_cycle[audiotype][mirindex]
                     self.custom_index[audiotype] += 1
                 else:
-                    target_frame = self.frame_list_cycle[idx]
+                    frame_list = avatar_payload[0] if avatar_payload is not None else self.frame_list_cycle
+                    target_frame = frame_list[idx]
                 
                 if enable_transition:
                     # 说话→静音过渡
@@ -430,7 +502,10 @@ class BaseAvatar:
             else:
                 self.speaking = True
                 try:
-                    current_frame = self.paste_back_frame(res_frame,idx)
+                    if avatar_payload is not None and callable(getattr(self, 'avatar_payload_for', None)):
+                        current_frame = self.paste_back_frame(res_frame, idx, avatar_payload)
+                    else:
+                        current_frame = self.paste_back_frame(res_frame,idx)
                 except Exception as e:
                     logger.warning(f"paste_back_frame error: {e}")
                     continue
@@ -446,11 +521,19 @@ class BaseAvatar:
                 else:
                     combine_frame = current_frame
 
+            if avatar_transition_frames and avatar_transition_from is not None:
+                alpha = (avatar_transition_total - avatar_transition_frames + 1) / avatar_transition_total
+                combine_frame = cv2.addWeighted(avatar_transition_from, 1 - alpha, combine_frame, alpha, 0)
+                avatar_transition_frames -= 1
+                if avatar_transition_frames == 0:
+                    avatar_transition_from = None
+
             cv2.putText(combine_frame, "LiveTalking", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128,128,128), 1)
             
             # 使用统一输出接口推送视频帧
             self.output.push_video_frame(combine_frame)
             self.record_video_data(combine_frame)
+            last_output_frame = combine_frame.copy()
 
             for audio_frame in audio_frames:
                 #frame,type,eventpoint = audio_frame

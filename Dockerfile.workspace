@@ -15,7 +15,10 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /opt/livetalking
 COPY requirements.txt /tmp/livetalking-workspace-requirements.txt
 # The local CUDA base provides the runtime dependencies; avoid changing its CUDA stack.
-RUN python -c "import aiohttp, aiortc, openai"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends espeak-ng \
+ && rm -rf /var/lib/apt/lists/* \
+ && python -c "import aiohttp, aiortc, openai"
 
 COPY . /opt/livetalking
 RUN python -c "import app; import avatars.wav2lip_avatar; import tts.edge" \

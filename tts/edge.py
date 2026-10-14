@@ -1,5 +1,6 @@
 import time
 import asyncio
+import subprocess
 import numpy as np
 import resampy
 import soundfile as sf
@@ -20,7 +21,8 @@ class EdgeTTS(BaseTTS):
         asyncio.new_event_loop().run_until_complete(self.__main(voicename,text))
         logger.info(f'-------edge tts time:{time.time()-t:.4f}s')
         if self.input_stream.getbuffer().nbytes<=0: #edgetts err
-            logger.error('edgetts err!!!!!')
+            logger.warning('Edge TTS returned no audio; using local Mandarin voice')
+            self._local_tts(text, textevent)
             return
         
         self.input_stream.seek(0)
@@ -41,6 +43,33 @@ class EdgeTTS(BaseTTS):
         #    self.queue.put(stream[idx:])
         self.input_stream.seek(0)
         self.input_stream.truncate() 
+
+    def _local_tts(self, text, textevent):
+        result = subprocess.run(
+            ['espeak-ng', '-v', 'cmn', '-s', '155', '--stdout', text],
+            check=True, capture_output=True, timeout=30,
+        )
+        audio, sample_rate = sf.read(BytesIO(result.stdout), dtype='float32')
+        if audio.ndim > 1:
+            audio = audio[:, 0]
+        if sample_rate != self.sample_rate:
+            audio = resampy.resample(audio, sr_orig=sample_rate, sr_new=self.sample_rate)
+
+        total = len(audio)
+        if total == 0:
+            raise RuntimeError('Local Mandarin TTS generated no audio')
+        for start in range(0, total, self.chunk):
+            frame = audio[start:start + self.chunk]
+            last = start + self.chunk >= total
+            if len(frame) < self.chunk:
+                frame = np.pad(frame, (0, self.chunk - len(frame)))
+            event = dict(textevent)
+            if start == 0:
+                event.update(status='start', text=text)
+            if last:
+                event.update(status='end', text=text)
+            self.parent.put_audio_frame(frame, event)
+        logger.info('Local Mandarin TTS generated %d audio frames', (total + self.chunk - 1) // self.chunk)
 
     def __create_bytes_stream(self,byte_stream):
         #byte_stream=BytesIO(buffer)

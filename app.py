@@ -84,6 +84,8 @@ def build_avatar_session(sessionid:str, params:dict)->BaseAvatar:
     if opt.model == 'wav2lip':
         package_manager.preview_allowed(avatar_id)
     opt_this.avatar_id = avatar_id
+    # Explicit avatar selection keeps the package page's original action preview.
+    opt_this.avatar_motion_preview = bool(params.get('avatar'))
     ref_audio = params.get('refaudio','') #音色
     ref_text = params.get('reftext','')
     if (avatar_id and avatar_id != opt.avatar_id):

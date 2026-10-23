@@ -61,7 +61,7 @@ def probe_video(path, expected_size=None):
             'frame_count': len(timestamps), 'codec': 'h264'}
 
 
-def validate_faces(path, report, detector, progress=lambda _: None):
+def validate_faces(path, report, detector, progress=lambda _: None, *, min_face_width=160):
     """Keep every detected box; never substitute the whole image for a missing face."""
     cap = cv2.VideoCapture(str(path))
     boxes, missing, multiple, small = [], [], [], []
@@ -84,7 +84,7 @@ def validate_faces(path, report, detector, progress=lambda _: None):
             x1, y1, x2, y2 = faces[0][:4]
             h, w = frame.shape[:2]
             box = [max(0, int(x1)), max(0, int(y1)), min(w, int(x2)), min(h, int(y2))]
-            if box[2] - box[0] < 160 or box[3] <= box[1]:
+            if box[2] - box[0] < min_face_width or box[3] <= box[1]:
                 small.append(index)
             boxes.append(box)
         progress(min(65, 10 + int(len(boxes) / report['frame_count'] * 55)))
@@ -113,7 +113,7 @@ def validate_faces(path, report, detector, progress=lambda _: None):
     if multiple:
         raise VideoValidationError(f'第 {multiple[0] + 1} 帧检测到多个人脸', report)
     if small:
-        raise VideoValidationError(f'第 {small[0] + 1} 帧人脸宽度不足 160 像素', report)
+        raise VideoValidationError(f'第 {small[0] + 1} 帧人脸宽度不足 {min_face_width} 像素', report)
     if coverage < .98:
         raise VideoValidationError(f'人脸检测覆盖率 {coverage:.1%}，低于 98%；第 {missing[0] + 1} 帧漏检', report)
     # Very brief misses may be repaired by adjacent boxes; larger gaps require new footage.

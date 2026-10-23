@@ -242,10 +242,13 @@ class PackageManager:
 
     def emotion_avatar_id(self, emotion):
         action_for_emotion = {
-            'neutral': 'neutral_explain',
+            'neutral': 'welcome_smile',
             'welcome': 'welcome_smile',
-            'serious': 'serious_emphasis',
-            'closing': 'closing_thanks',
+            # The 02 serious clip is disabled because its pose/background do
+            # not match the active 01/03/05/06 set. Closing is scheduled after
+            # audio completion by MotionScheduler instead of here.
+            'serious': 'welcome_smile',
+            'closing': 'welcome_smile',
         }
         with self.lock:
             path = self.root / 'active.json'

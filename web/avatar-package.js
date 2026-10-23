@@ -148,11 +148,17 @@ async function connect() {
   if (!action || action.status !== 'completed') return;
   disconnect(); const token = previewToken;
   const connection = new RTCPeerConnection({iceServers:[]}); pc = connection;
+  const remoteStream = new MediaStream();
+  $('liveVideo').muted = false;
+  $('liveVideo').srcObject = remoteStream;
+  $('liveAudio').srcObject = null;
   $('connectionState').textContent = '连接中'; $('disconnect').disabled = false;
   connection.ontrack = event => {
     if (token !== previewToken) return;
-    const target = event.track.kind === 'video' ? $('liveVideo') : $('liveAudio');
-    target.srcObject = new MediaStream([event.track]); target.play().catch(() => notice('浏览器暂停了音频播放，请允许当前站点播放音频。'));
+    remoteStream.addTrack(event.track);
+    $('liveVideo').play().catch(error => {
+      if (error.name === 'NotAllowedError') notice('浏览器已暂停自动播放，请使用视频播放按钮恢复。');
+    });
   };
   connection.onconnectionstatechange = () => {
     if (token !== previewToken) return;

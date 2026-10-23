@@ -37,7 +37,10 @@ import asyncio
 from enum import Enum
 import json
 import importlib
+import copy
+from uuid import uuid4
 import registry
+from tts.text_normalizer import restore_display_text
 
 import torch.multiprocessing as mp
 from dataclasses import dataclass, field
@@ -81,6 +84,11 @@ class BaseAvatar:
         self.msgqueues = []
         self.llm_dialog_lock = Lock()
         self.llm_history = []
+        self.speech_epoch = 0
+        # Invalidates in-flight LLM work when a newer user request interrupts it.
+        self.dialog_generation = 0
+        self.speech_lock = Lock()
+        self.motion_scheduler = None
         # self.custom_opt = {}
         self.__loadcustom()
 
@@ -103,8 +111,14 @@ class BaseAvatar:
         }
 
         if opt.tts in _tts_modules:
-            importlib.import_module(_tts_modules[opt.tts])
-            self.tts = registry.create("tts", opt.tts, opt=opt, parent=self)
+            tts_name = opt.tts
+            tts_opt = opt
+            try:
+                importlib.import_module(_tts_modules[tts_name])
+                self.tts = registry.create("tts", tts_name, opt=tts_opt, parent=self)
+            except Exception:
+                logger.exception('%s initialization failed; no TTS fallback is enabled', tts_name)
+                raise
         else:
             logger.error(f"TTS module {opt.tts} not found.")
 
@@ -127,14 +141,31 @@ class BaseAvatar:
 
     # 如果系统没有使用 pipeline，或者为了向后兼容原来的 ttsreal.py
     def put_msg_txt(self, msg, datainfo:dict={}):
-        if hasattr(self, 'tts'):
-            self.tts.put_msg_txt(msg, datainfo)
+        with self.speech_lock:
+            event = self.speech_event(datainfo)
+            if event['_speech_epoch'] == self.speech_epoch and hasattr(self, 'tts'):
+                self.tts.put_msg_txt(msg, event)
+
+    def speech_event(self, datainfo):
+        event = dict(datainfo or {})
+        event.setdefault('_speech_epoch', self.speech_epoch)
+        event.setdefault('_dialog_generation', getattr(self, 'dialog_generation', 0))
+        event.setdefault('_utterance_id', uuid4().hex)
+        event.setdefault('_round_id', event['_utterance_id'])
+        event.setdefault('_round_final', True)
+        return event
+
+    def is_dialog_current(self, generation):
+        return generation == getattr(self, 'dialog_generation', 0)
     
     def put_audio_frame(self, audio_chunk:NDArray[np.float32], datainfo:dict={}): # 16khz 20ms pcm
+        if datainfo.get('_speech_epoch', self.speech_epoch) != self.speech_epoch:
+            return
         if hasattr(self, 'asr'):
-            self.asr.put_audio_frame(audio_chunk, datainfo)
+            self.asr.put_audio_frame(audio_chunk, restore_display_text(datainfo))
 
     def put_audio_file(self, filebyte, datainfo:dict={}): 
+        datainfo = self.speech_event(datainfo)
         input_stream = BytesIO(filebyte)
         stream = self.__create_bytes_stream(input_stream)
         streamlen = stream.shape[0]
@@ -153,6 +184,7 @@ class BaseAvatar:
             idx += self.chunk
 
     def put_audio_filepath(self, filepath, datainfo:dict={}): 
+        datainfo = self.speech_event(datainfo)
         stream = self.__create_bytes_stream(filepath)
         streamlen = stream.shape[0]
         idx = 0
@@ -185,11 +217,24 @@ class BaseAvatar:
         return stream
 
     def flush_talk(self):
+        with self.speech_lock:
+            self.speech_epoch += 1
+            self.dialog_generation = getattr(self, 'dialog_generation', 0) + 1
+            if self.motion_scheduler:
+                self.motion_scheduler.interrupt(self.speech_epoch)
         if hasattr(self, 'tts') and hasattr(self.tts, 'flush_talk'):
             self.tts.flush_talk()
         if hasattr(self, 'asr') and hasattr(self.asr, 'flush_talk'):
             self.asr.flush_talk()
         self.custom_audiotype = 0  
+        with self.res_frame_queue.mutex:
+            self.res_frame_queue.queue.clear()
+            self.res_frame_queue.not_full.notify_all()
+        flush_output = getattr(getattr(self, 'output', None), 'flush', None)
+        if flush_output:
+            flush_output()
+        self.send_msg(json.dumps({'status': 'interrupt',
+                                  'dialog_generation': self.dialog_generation}))
 
     # def flush(self):
     #     self.flush_talk()
@@ -226,9 +271,26 @@ class BaseAvatar:
             q.put(msg)
 
     def notify(self, eventpoint:dict):
+        if eventpoint and eventpoint.get('_speech_epoch', self.speech_epoch) != self.speech_epoch:
+            return
+        if self.motion_scheduler and eventpoint and eventpoint.get('_motion_started'):
+            self.motion_scheduler.played(eventpoint['_motion_started'],
+                                         eventpoint.get('_speech_epoch', self.speech_epoch),
+                                         eventpoint.get('_audio_sample_start',
+                                                        eventpoint.get('_media_sample_start')))
+            logger.info('Motion playback started profile=%s media_sample=%s (session=%s)',
+                        eventpoint.get('_motion_profile'), eventpoint.get('_media_sample_start'),
+                        self.sessionid)
         if eventpoint and eventpoint.get('status'):
-            logger.info("notify:%s", eventpoint)
-            self.send_msg(json.dumps(eventpoint))
+            public_event = {key: value for key, value in eventpoint.items()
+                            if not key.startswith('_')}
+            public_event['speech_id'] = eventpoint.get('_utterance_id', '')
+            public_event['dialog_generation'] = eventpoint.get(
+                '_dialog_generation', getattr(self, 'dialog_generation', 0))
+            public_event['request_id'] = eventpoint.get('_request_id', '')
+            public_event['round_final'] = eventpoint.get('_round_final', True)
+            logger.info("notify:%s", public_event)
+            self.send_msg(json.dumps(public_event))
 
     def start_recording(self):
         if self.recording:
@@ -341,18 +403,28 @@ class BaseAvatar:
         while not quit_event.is_set():
             starttime = time.perf_counter()
             audiofeat_batch = []
+            mel_batch = None
             try:
                 audiofeat_batch = self.asr.feat_queue.get(block=True, timeout=1)
             except queue.Empty:
                 continue
                 
-            is_all_silence = True
-            audio_frames: list[AudioFrameData] = []
-            for _ in range(self.batch_size * 2):
-                audioframe:AudioFrameData = self.asr.output_queue.get()
-                if audioframe.type == 0:
-                    is_all_silence = False               
-                audio_frames.append(audioframe)
+            if getattr(self.asr, 'paired_batches', False):
+                if audiofeat_batch.epoch != self.speech_epoch:
+                    continue
+                mel_batch = audiofeat_batch
+                audio_frames = mel_batch.audio_frames
+                audiofeat_batch = mel_batch.features
+            else:
+                audio_frames = [self.asr.output_queue.get()
+                                for _ in range(self.batch_size * 2)]
+            is_all_silence = all(frame.type != 0 for frame in audio_frames)
+
+            if self.motion_scheduler:
+                for item in self.infer_motion_batch(audiofeat_batch, audio_frames,
+                                                    timing=mel_batch):
+                    self.res_frame_queue.put(item)
+                continue
 
              # 检测状态变化
             current_speaking = not is_all_silence
@@ -444,10 +516,11 @@ class BaseAvatar:
         _last_speaking = False
         _transition_start = time.time()
         current_avatar_payload = None
+        current_motion_avatar_id = None
         last_output_frame = None
         avatar_transition_from = None
         avatar_transition_frames = 0
-        avatar_transition_total = 6
+        avatar_transition_total = self.motion_scheduler.transition_frames if self.motion_scheduler else 6
         if enable_transition:
             _transition_duration = 0.1  # 过渡时间
             _last_silent_frame = None  # 静音帧缓存
@@ -461,7 +534,11 @@ class BaseAvatar:
                 item = self.res_frame_queue.get(block=True, timeout=1)
                 res_frame, audio_frames, idx = item[:3]
                 avatar_payload = item[3] if len(item) > 3 else None
+                motion_meta = item[4] if len(item) > 4 else None
             except queue.Empty:
+                continue
+
+            if motion_meta and motion_meta['epoch'] != self.speech_epoch:
                 continue
             
             # 检测状态变化
@@ -472,10 +549,19 @@ class BaseAvatar:
             _last_speaking = current_speaking
 
             if avatar_payload is not None and avatar_payload is not current_avatar_payload:
-                if current_avatar_payload is not None and last_output_frame is not None:
+                if motion_meta:
+                    logger.info('Motion profile=%s frame=%s (session=%s)',
+                                motion_meta['profile'], idx, self.sessionid)
+                motion_avatar_id = motion_meta.get('avatar_id') if motion_meta else None
+                action_changed = (motion_avatar_id != current_motion_avatar_id
+                                  if motion_avatar_id is not None else True)
+                if (action_changed and current_avatar_payload is not None
+                        and last_output_frame is not None):
                     avatar_transition_from = last_output_frame.copy()
                     avatar_transition_frames = avatar_transition_total
                 current_avatar_payload = avatar_payload
+                if motion_avatar_id is not None:
+                    current_motion_avatar_id = motion_avatar_id
 
             if audio_frames[0].type!=0 and audio_frames[1].type!=0: #全为静音数据，只需要取fullimg
                 self.speaking = False
@@ -529,19 +615,31 @@ class BaseAvatar:
                     avatar_transition_from = None
 
             cv2.putText(combine_frame, "LiveTalking", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128,128,128), 1)
-            
+
+            # 先将同一视频帧对应的 40ms 音频送入浏览器队列，减少
+            # WebRTC 会话开始时视频相对音频领先一帧的观感。
+            push_media = getattr(self.output, 'push_media_frame', None)
+            if push_media:
+                push_media(combine_frame, audio_frames,
+                           motion_meta['epoch'] if motion_meta else self.speech_epoch,
+                           float(getattr(self.opt, 'lip_sync_offset_ms', 0.0)),
+                           video_metadata=motion_meta)
+            for audio_frame in audio_frames:
+                frame = (audio_frame.data * 32767).astype(np.int16)
+                if not push_media:
+                    self.output.push_audio_frame(frame, audio_frame.userdata)
+                self.record_audio_data(frame)
+
             # 使用统一输出接口推送视频帧
-            self.output.push_video_frame(combine_frame)
+            push_motion_video = getattr(self.output, 'push_motion_video_frame', None)
+            if push_media:
+                pass
+            elif motion_meta and push_motion_video:
+                push_motion_video(combine_frame, motion_meta['epoch'])
+            else:
+                self.output.push_video_frame(combine_frame)
             self.record_video_data(combine_frame)
             last_output_frame = combine_frame.copy()
-
-            for audio_frame in audio_frames:
-                #frame,type,eventpoint = audio_frame
-                frame = (audio_frame.data * 32767).astype(np.int16)
-
-                # 使用统一输出接口推送音频帧
-                self.output.push_audio_frame(frame, audio_frame.userdata)
-                self.record_audio_data(frame)
                 
             # if self.opt.transport == 'virtualcam' and hasattr(self.output, '_cam') and self.output._cam:
             #     self.output._cam.sleep_until_next_frame()

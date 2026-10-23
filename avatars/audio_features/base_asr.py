@@ -42,6 +42,7 @@ class BaseASR:
         self.frames: list[NDArray[np.float32]] = []
         self.stride_left_size = opt.l
         self.stride_right_size = opt.r
+        self._audio_sequence = 0
         #self.context_size = 10
         self.feat_queue = Queue(maxsize=2)
 
@@ -49,9 +50,16 @@ class BaseASR:
 
     def flush_talk(self):
         self.queue.queue.clear()
+        self.output_queue.queue.clear()
+        self.frames.clear()
+        self._audio_sequence = 0
 
     def put_audio_frame(self,audio_chunk:NDArray[np.float32],datainfo:dict): #16khz 20ms pcm
-        self.queue.put(AudioFrameData(data=audio_chunk,type=0,userdata=datainfo))
+        userdata = dict(datainfo or {})
+        audio_type = int(userdata.get('_audio_type', 0))
+        userdata.setdefault('_audio_sequence', self._audio_sequence)
+        self._audio_sequence += 1
+        self.queue.put(AudioFrameData(data=audio_chunk,type=audio_type,userdata=userdata))
 
     #return frame:audio pcm; type: 0-normal speak, 1-silence; eventpoint:custom event sync with audio
     def get_audio_frame(self)->AudioFrameData:        
@@ -74,12 +82,18 @@ class BaseASR:
         return self.output_queue.get()
     
     def warm_up(self):
+        # Mel features begin after the left context.  Subclasses can specify
+        # how many 20 ms output frames must be discarded so the first video
+        # pair has the same timestamp as the first feature chunk.
         for _ in range(self.stride_left_size + self.stride_right_size):
             audio_frame=self.get_audio_frame()
             self.frames.append(audio_frame.data)
             self.output_queue.put(audio_frame)
-        for _ in range(self.stride_left_size):
+        for _ in range(self.output_preroll_frames()):
             self.output_queue.get()
+
+    def output_preroll_frames(self):
+        return self.stride_left_size
 
     def run_step(self):
         pass

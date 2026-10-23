@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from avatars.base_avatar import BaseAvatar
 
 from utils.logger import logger
+from .text_normalizer import prepare_speech_message
 
 class State(Enum):
     RUNNING = 0
@@ -28,12 +29,19 @@ class BaseTTS:
         self.state = State.RUNNING
 
     def flush_talk(self):
-        self.msgqueue.queue.clear()
+        with self.msgqueue.mutex:
+            self.msgqueue.queue.clear()
+            self.msgqueue.not_full.notify_all()
         self.state = State.PAUSE
+        # Specialized streaming engines can clear generated-but-not-played
+        # segments without making the base queue aware of their internals.
+        clear_prefetch = getattr(self, '_clear_prefetch_queue', None)
+        if clear_prefetch:
+            clear_prefetch()
 
-    def put_msg_txt(self, msg: str, datainfo: dict = {}): 
+    def put_msg_txt(self, msg: str, datainfo: dict = None):
         if len(msg) > 0:
-            self.msgqueue.put((msg, datainfo))
+            self.msgqueue.put((msg, dict(datainfo or {})))
 
     def render(self, quit_event):
         process_thread = Thread(target=self.process_tts, args=(quit_event,))
@@ -43,10 +51,12 @@ class BaseTTS:
         while not quit_event.is_set():
             try:
                 msg: tuple[str, dict] = self.msgqueue.get(block=True, timeout=1)
+                if msg[1].get('_speech_epoch', 0) != getattr(getattr(self, 'parent', None), 'speech_epoch', 0):
+                    continue
                 self.state = State.RUNNING
             except queue.Empty:
                 continue
-            self.txt_to_audio(msg)
+            self.txt_to_audio(prepare_speech_message(*msg))
         self.stop_tts()
         logger.info('ttsreal thread stop')
     

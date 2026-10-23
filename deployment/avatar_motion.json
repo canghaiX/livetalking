@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "package_id": "railway_presenter_v2",
+  "expression_hold_seconds": 4,
+  "gesture_cooldown_seconds": 8,
+  "lip_sync_offset_ms": 100,
+  "lip_sync_calibration": "sample_start",
+  "max_gestures_per_round": 3,
+  "nod_cooldown_seconds": 24,
+  "nod_probability": 0.35,
+  "max_nods_per_round": 1,
+  "nod_min_segments": 3,
+  "nod_min_chars": 80,
+  "idle_return_seconds": 0.6,
+  "transition_frames": 6,
+  "idle_profile": "idle",
+  "profiles": {
+    "idle": {"action_id": "welcome_smile_uniform_v3", "start": 0, "end": 100},
+    "smile": {"action_id": "welcome_smile_uniform_v3", "start": 0, "end": 100, "idle": 0},
+    "serious": {"action_id": "welcome_smile_uniform_v3", "start": 0, "end": 100, "idle": 0},
+    "guide": {"action_id": "neutral_explain_uniform_v3", "start": 0, "end": 164},
+    "wave": {"action_id": "gentle_introduce_07_uniform_v3", "start": 0, "end": 149},
+    "emphasis": {"action_id": "gentle_introduce_07_uniform_v3", "start": 0, "end": 149},
+    "closing": {"action_id": "closing_thanks_uniform_v3", "start": 0, "end": 249},
+    "nod": {"action_id": "closing_thanks_uniform_v3", "start": 0, "end": 249}
+  }
+}

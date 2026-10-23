@@ -46,6 +46,7 @@ openai
 #websocket-client
 websockets==12.0
 dashscope
+cn2an==0.5.24
 #gradio_client
 #azure-cognitiveservices-speech
 

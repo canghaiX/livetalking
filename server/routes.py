@@ -50,10 +50,22 @@ async def human(request):
         if avatar_session is None:
             return json_error("session not found")
 
-        if params.get('interrupt'):
+        if params.get('type') not in ('echo', 'chat'):
+            return json_error('type must be echo or chat')
+        if not isinstance(params.get('text'), str) or not params['text'].strip():
+            return json_error('请输入文字')
+        if len(params['text']) > 4000:
+            return json_error('输入文字不能超过 4000 字')
+
+        # Every chat request owns the newest dialog generation. The homepage
+        # always interrupts; legacy echo callers retain their old behavior.
+        if params.get('type') == 'chat' or params.get('interrupt'):
             avatar_session.flush_talk()
 
         datainfo = {}
+        datainfo['_speech_epoch'] = avatar_session.speech_epoch
+        datainfo['_dialog_generation'] = avatar_session.dialog_generation
+        datainfo['_request_id'] = str(params.get('request_id') or '')
         if params.get('tts'):  # tts 参数透传（voice, emotion 等）
             datainfo['tts'] = params.get('tts')
 
@@ -65,8 +77,12 @@ async def human(request):
                 answer = await asyncio.get_event_loop().run_in_executor(
                     None, llm_response, params['text'], avatar_session, datainfo
                 )
+                metadata = {'request_id': datainfo['_request_id'],
+                            'dialog_generation': datainfo['_dialog_generation']}
+                if not avatar_session.is_dialog_current(datainfo['_dialog_generation']):
+                    return json_ok({**metadata, 'cancelled': True})
                 if answer:
-                    return json_ok({'answer': answer})
+                    return json_ok({**metadata, 'answer': answer})
                 return json_error("LLM 暂时无法回复，请检查模型服务配置")
 
         return json_ok()
@@ -84,10 +100,18 @@ async def interrupt_talk(request):
         if avatar_session is None:
             return json_error("session not found")
         avatar_session.flush_talk()
-        return json_ok()
+        return json_ok({'dialog_generation': avatar_session.dialog_generation})
     except Exception as e:
         logger.exception('interrupt_talk exception:')
         return json_error(str(e))
+
+
+async def aliyun_asr(request):
+    """Proxy browser PCM to Aliyun Paraformer without exposing credentials."""
+    from server.aliyun_asr import proxy_asr
+    if get_session(request, request.query.get('sessionid', '')) is None:
+        return web.json_response({'code': -1, 'msg': 'session not found'}, status=404)
+    return await proxy_asr(request)
 
 
 async def humanaudio(request):
@@ -176,12 +200,20 @@ async def sse_handler(request):
     avatar_session.add_msgqueue(msgqueue)
 
     try:
-        while True:
+        await response.write(b': connected\n\n')
+        heartbeat = asyncio.get_running_loop().time()
+        while session_manager.get_session(sessionid) is avatar_session:
             try:
                 msg = msgqueue.get_nowait()
+                data = json.loads(msg)
+                if data.get('dialog_generation', avatar_session.dialog_generation) != avatar_session.dialog_generation:
+                    continue
                 await response.write(f"data: {msg}\n\n".encode('utf-8'))
             except queue.Empty:
-                await asyncio.sleep(0.01)
+                if asyncio.get_running_loop().time() - heartbeat >= 10:
+                    await response.write(b': heartbeat\n\n')
+                    heartbeat = asyncio.get_running_loop().time()
+                await asyncio.sleep(0.03)
     except (asyncio.CancelledError, ConnectionResetError):
         logger.info('SSE connection closed for session: %s', sessionid)
     finally:
@@ -268,6 +300,9 @@ def setup_routes(app):
                         "(pip install funasr modelscope)")
     except Exception as e:
         logger.warning(f"[ASR] Failed to register ASR endpoint: {e}")
+    from server.aliyun_asr import asr_status
+    app.router.add_get('/api/asr/aliyun/status', asr_status)
+    app.router.add_get('/api/asr/aliyun', aliyun_asr)
 
     # 注册 avatar 生成相关的路由
     setup_avatar_routes(app)

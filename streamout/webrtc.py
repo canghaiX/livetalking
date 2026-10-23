@@ -28,9 +28,19 @@ class WebRTCOutput(BaseOutput):
         if self._player:
             self._player.push_video(frame)
 
+    def push_motion_video_frame(self, frame, epoch) -> None:
+        if self._player:
+            self._player.push_video(frame, {'_speech_epoch': epoch})
+
     def push_audio_frame(self, frame, eventpoint=None) -> None:
         if self._player:
             self._player.push_audio(frame, eventpoint)
+
+    def push_media_frame(self, frame, audio_frames, epoch, lip_sync_offset_ms=0.0,
+                         video_metadata=None) -> None:
+        if self._player:
+            self._player.push_media(frame, audio_frames, epoch, lip_sync_offset_ms,
+                                    video_metadata=video_metadata)
 
 
 
@@ -38,6 +48,10 @@ class WebRTCOutput(BaseOutput):
         if self._player and hasattr(self._player, 'get_buffer_size'):
             return self._player.get_buffer_size()
         return 0
+
+    def flush(self) -> None:
+        if self._player:
+            self._player.flush()
 
     def stop(self) -> None:
         pass

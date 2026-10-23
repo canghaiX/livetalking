@@ -1,7 +1,9 @@
-ARG BASE_IMAGE=livetalking-main:local
+ARG BASE_IMAGE=livetalking:gesture-sync
 FROM ${BASE_IMAGE}
 
 ARG SOURCE_REVISION=unknown
+ARG LIVETALKING_UID=1006
+ARG LIVETALKING_GID=1006
 LABEL org.opencontainers.image.title="LiveTalking" \
       org.opencontainers.image.source="https://github.com/canghaiX/livetalking" \
       org.opencontainers.image.revision="${SOURCE_REVISION}"
@@ -15,16 +17,28 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /opt/livetalking
 COPY requirements.txt /tmp/livetalking-workspace-requirements.txt
 # The local CUDA base provides the runtime dependencies; avoid changing its CUDA stack.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends espeak-ng \
- && rm -rf /var/lib/apt/lists/* \
+# The CUDA base already carries espeak-ng and the Python runtime.  Keep this
+# layer offline-friendly so rebuilding on a server does not depend on apt
+# mirrors being reachable.
+RUN command -v espeak-ng \
  && python -c "import aiohttp, aiortc, openai"
 
-RUN python -m pip install --no-cache-dir 'piper-tts[zh]==1.8.0'
+RUN python -c "import piper, cn2an, dashscope" \
+ || python -m pip install --no-cache-dir \
+    --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    'piper-tts[zh]==1.8.0' 'cn2an==0.5.24' 'dashscope>=1.25.11'
 
 COPY . /opt/livetalking
-RUN python -c "import app; import avatars.wav2lip_avatar; import tts.edge" \
+RUN python -c "import app; import avatars.wav2lip_avatar; import tts.edge; import tts.qwentts" \
  && python -m pip freeze > /opt/livetalking/requirements.installed.txt
+
+# Run the service as the host workspace user.  The deployment mounts data
+# directories owned by uid/gid 1006, so model caches and generated avatars do
+# not become root-owned after a restart.
+RUN groupadd --gid ${LIVETALKING_GID} ym \
+ && useradd --uid ${LIVETALKING_UID} --gid ${LIVETALKING_GID} --create-home --shell /bin/bash ym \
+ && chown -R ym:ym /opt/livetalking
+USER ym
 
 EXPOSE 8020
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \

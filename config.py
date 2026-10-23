@@ -65,24 +65,42 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=16, help="infer batch")
     parser.add_argument('--modelres', type=int, default=192)
     parser.add_argument('--modelfile', type=str, default='')
+    parser.add_argument('--face_blend_start_ratio', type=float, default=0.44,
+                        help='fraction of the face crop above which the source face is preserved')
+    parser.add_argument('--face_blend_feather_ratio', type=float, default=0.10,
+                        help='soft transition width for Wav2Lip mouth compositing')
 
     # ─── 自定义动作和多形象 ────────────────────────────────────────────
     parser.add_argument('--customvideo_config', type=str, default='',
                         help="custom action json")
+    parser.add_argument('--avatar_motion_config', type=str, default='',
+                        help='Playback profiles for automatic expression and gesture scheduling')
 
     # ─── TTS ───────────────────────────────────────────────────────────
-    parser.add_argument('--tts', type=str, default='edgetts',
+    parser.add_argument('--tts', type=str, default='qwentts',
                         help="tts plugin: edgetts/gpt-sovits/cosyvoice/fishtts/tencent/doubao/indextts2/azuretts/qwentts")
-    parser.add_argument('--REF_FILE', type=str, default="zh-CN-YunxiaNeural",
-                        help="参考文件名或语音模型ID")
+    parser.add_argument('--REF_FILE', type=str, default="Serena",
+                        help="Qwen TTS voice (fixed to Serena)")
     parser.add_argument('--REF_TEXT', type=str, default=None)
     parser.add_argument('--TTS_SERVER', type=str, default='http://127.0.0.1:9880')
+    parser.add_argument('--qwen_tts_retry_initial_seconds', type=float, default=1.0,
+                        help='initial delay before retrying a failed Serena synthesis')
+    parser.add_argument('--qwen_tts_retry_max_seconds', type=float, default=8.0,
+                        help='maximum backoff between Serena synthesis retries')
+    parser.add_argument('--qwen_tts_response_timeout_seconds', type=float, default=60.0,
+                        help='per-attempt Qwen response timeout; retries keep the same voice')
+    parser.add_argument('--qwen_tts_first_buffer_frames', type=int, default=3,
+                        help='number of 20ms PCM frames buffered before streaming Serena audio')
+    parser.add_argument('--qwen_tts_prefetch_segments', type=int, default=1)
+    parser.add_argument('--qwen_tts_prefetch_queue_size', type=int, default=4)
 
     # ─── LLM ──────────────────────────────────────────────────────────
     parser.add_argument('--llm_provider', type=str, default='dashscope',
                         help="llm provider: dashscope/orcarouter")
     parser.add_argument('--llm_model', type=str, default='',
                         help="llm model override, empty = provider default (qwen-plus / orcarouter/auto)")
+    parser.add_argument('--llm_stream_segment_max_chars', type=int, default=40,
+                        help='maximum characters in a streamed speech segment')
 
     # ─── 传输 ─────────────────────────────────────────────────────────
     parser.add_argument('--transport', type=str, default='webrtc',
@@ -92,6 +110,10 @@ def parse_args():
     parser.add_argument('--push_url', type=str,
                         default='http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream')
     parser.add_argument('--max_session', type=int, default=5)
+    parser.add_argument('--webrtc_sync_buffer_frames', type=int, default=2,
+                        help='initial audio/video buffer in 25fps video frames')
+    parser.add_argument('--lip_sync_offset_ms', type=float, default=0.0,
+                        help='measured audio/video onset offset; transport default is zero')
     parser.add_argument('--listenport', type=int, default=8010,
                         help="web listen port")
 

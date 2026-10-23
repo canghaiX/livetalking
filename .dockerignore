@@ -18,4 +18,5 @@ deployment/test-*
 data/avatar_packages
 data/avatars/*__*
 deployment/package-browser-test.cjs
+deployment/motion-browser-test.cjs
 deployment/package-integration.py

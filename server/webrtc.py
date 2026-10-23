@@ -67,16 +67,26 @@ class PlayerStreamTrack(MediaStreamTrack):
     _start: float
     _timestamp: int
 
-    async def next_timestamp(self) -> Tuple[int, fractions.Fraction]:
+    async def next_timestamp(self, sample_start=None) -> Tuple[int, fractions.Fraction]:
         if self.readyState != "live":
             raise Exception
+
+        if sample_start is not None:
+            video = self.kind == 'video'
+            rate = VIDEO_CLOCK_RATE if video else SAMPLE_RATE
+            self._start = self._player.timeline_start()
+            self._timestamp = int(sample_start * rate // SAMPLE_RATE)
+            wait = self._start + self._timestamp / rate - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            return self._timestamp, VIDEO_TIME_BASE if video else AUDIO_TIME_BASE
 
         if self.kind == 'video':
             if hasattr(self, "_timestamp"):
                 #self._timestamp = (time.time()-self._start) * VIDEO_CLOCK_RATE
                 self._timestamp += int(VIDEO_PTIME * VIDEO_CLOCK_RATE)
                 self.current_frame_count += 1
-                wait = self._start + self.current_frame_count * VIDEO_PTIME - time.time()
+                wait = self._start + self.current_frame_count * VIDEO_PTIME - time.monotonic()
                 # wait = self.timelist[0] + len(self.timelist)*VIDEO_PTIME - time.time()               
                 if wait>0:
                     await asyncio.sleep(wait)
@@ -84,7 +94,7 @@ class PlayerStreamTrack(MediaStreamTrack):
                 #     self.timelist.pop(0)
                 # self.timelist.append(time.time())
             else:
-                self._start = time.time()
+                self._start = self._player.timeline_start()
                 self._timestamp = 0
                 self.timelist.append(self._start)
                 mylogger.info('video start:%f',self._start)
@@ -94,7 +104,7 @@ class PlayerStreamTrack(MediaStreamTrack):
                 #self._timestamp = (time.time()-self._start) * SAMPLE_RATE
                 self._timestamp += int(AUDIO_PTIME * SAMPLE_RATE)
                 self.current_frame_count += 1
-                wait = self._start + self.current_frame_count * AUDIO_PTIME - time.time()
+                wait = self._start + self.current_frame_count * AUDIO_PTIME - time.monotonic()
                 # wait = self.timelist[0] + len(self.timelist)*AUDIO_PTIME - time.time()
                 if wait>0:
                     await asyncio.sleep(wait)
@@ -103,7 +113,7 @@ class PlayerStreamTrack(MediaStreamTrack):
                 #     self.timelist.pop(0)
                 # self.timelist.append(time.time())
             else:
-                self._start = time.time()
+                self._start = self._player.timeline_start()
                 self._timestamp = 0
                 self.timelist.append(self._start)
                 mylogger.info('audio start:%f',self._start)
@@ -114,6 +124,7 @@ class PlayerStreamTrack(MediaStreamTrack):
             raise MediaStreamError
         # frame = self.frames[self.counter % 30]            
         self._player._start(self)
+        await self._player.wait_for_sync_buffer()
         # if self.kind == 'video':
         #     frame = await self._queue.get()
         # else: #audio
@@ -134,13 +145,19 @@ class PlayerStreamTrack(MediaStreamTrack):
                 raise MediaStreamError
             try:
                 frame, eventpoint = self._queue.get_nowait()
+                if self._player is not None and not self._player.is_current(eventpoint):
+                    continue
                 break
             except queue.Empty:
                 await asyncio.sleep(0.005)
                 
-        pts, time_base = await self.next_timestamp()
+        pts, time_base = await self.next_timestamp((eventpoint or {}).get('_media_sample_start'))
+        if self._player is not None and not self._player.is_current(eventpoint):
+            return await self.recv()
         frame.pts = pts
         frame.time_base = time_base
+        if self._player is not None:
+            self._player.sent(self.kind, pts, time_base)
         if eventpoint and self._player is not None:
             self._player.notify(eventpoint)
         if frame is None:
@@ -187,15 +204,22 @@ class HumanPlayer:
 
         self.__audio = PlayerStreamTrack(self, kind="audio")
         self.__video = PlayerStreamTrack(self, kind="video")
+        options = getattr(avatar_session, 'opt', None)
+        self._sync_buffer_frames = max(0, int(getattr(options, 'webrtc_sync_buffer_frames', 3)))
+        self._sync_ready = False
+        self._sync_start = None
+        self._media_lock = threading.RLock()
+        self._next_media_sample = 0
+        self._sent_sample_end = {'audio': 0, 'video': 0}
 
         self.__container = avatar_session
         if hasattr(self.__container, 'output'):
             self.__container.output._player = self
 
-    def push_video(self, frame):
+    def push_video(self, frame, eventpoint=None):
         from av import VideoFrame
         new_frame = VideoFrame.from_ndarray(frame, format="bgr24")
-        self._push_frame(self.__video, new_frame)
+        self._push_frame(self.__video, new_frame, eventpoint)
 
     def push_audio(self, frame, eventpoint=None):
         from av import AudioFrame
@@ -203,6 +227,31 @@ class HumanPlayer:
         new_frame.planes[0].update(frame.tobytes())
         new_frame.sample_rate = 16000
         self._push_frame(self.__audio, new_frame, eventpoint)
+
+    def push_media(self, frame, audio_frames, epoch, lip_sync_offset_ms=0.0,
+                   video_metadata=None):
+        """Assign a shared sample position to each video/audio pair."""
+        with self._media_lock:
+            if not self.is_current({'_speech_epoch': epoch}):
+                return
+            start = self._next_media_sample
+            self._next_media_sample += sum(len(item.data) for item in audio_frames)
+            offset = 0
+            for item in audio_frames:
+                event = dict(item.userdata, _speech_epoch=epoch,
+                             _media_sample_start=start + offset)
+                self.push_audio((item.data * 32767).astype(np.int16), event)
+                offset += len(item.data)
+            offset = max(0, round(float(lip_sync_offset_ms) * SAMPLE_RATE / 1000.0))
+            video_event = dict(video_metadata or {})
+            video_event.update({'_speech_epoch': epoch,
+                                '_media_sample_start': start + offset,
+                                '_lip_sync_offset_samples': offset})
+            self.push_video(frame, video_event)
+
+    def sent(self, kind, pts, time_base):
+        duration = 640 if kind == 'video' else 320
+        self._sent_sample_end[kind] = int(pts * time_base * SAMPLE_RATE) + duration
 
     def _push_frame(self, track, frame, eventpoint=None):
         # Closing a peer stops consumption. A full queue must not trap the render thread.
@@ -216,9 +265,51 @@ class HumanPlayer:
     def get_buffer_size(self) -> int:
         return self.__video._queue.qsize()
 
+    def flush(self):
+        with self._media_lock:
+            for track in (self.__audio, self.__video):
+                with track._queue.mutex:
+                    track._queue.queue.clear()
+                    track._queue.not_full.notify_all()
+            # Drop buffered delay while staying ahead of any in-flight packet.
+            positions = list(self._sent_sample_end.values())
+            for track in (self.__audio, self.__video):
+                if hasattr(track, '_timestamp'):
+                    rate = VIDEO_CLOCK_RATE if track.kind == 'video' else SAMPLE_RATE
+                    positions.append(track._timestamp * SAMPLE_RATE // rate + 640)
+            self._next_media_sample = ((max(positions) + 639) // 640) * 640
+
+    def timeline_start(self):
+        if self._sync_start is None:
+            self._sync_start = time.monotonic()
+        return self._sync_start
+
+    async def wait_for_sync_buffer(self):
+        """Start audio/video timestamps from one clock after a small preroll."""
+        if self._sync_ready or self._sync_buffer_frames <= 0:
+            self._sync_ready = True
+            self.timeline_start()
+            return
+        deadline = time.monotonic() + 2.0
+        while not self._sync_ready:
+            both_tracks_started = self.__audio in self.__started and self.__video in self.__started
+            enough_audio = self.__audio._queue.qsize() >= self._sync_buffer_frames * 2
+            enough_video = self.__video._queue.qsize() >= self._sync_buffer_frames
+            if (both_tracks_started and enough_audio and enough_video) or time.monotonic() >= deadline:
+                self._sync_ready = True
+                self.timeline_start()
+                return
+            await asyncio.sleep(0.005)
+
     def notify(self,eventpoint):
         if self.__container is not None:
             self.__container.notify(eventpoint)
+
+    def is_current(self, eventpoint):
+        if not eventpoint or self.__container is None:
+            return True
+        epoch = getattr(self.__container, 'speech_epoch', 0)
+        return eventpoint.get('_speech_epoch', epoch) == epoch
 
     @property
     def audio(self) -> MediaStreamTrack:

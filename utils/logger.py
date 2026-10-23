@@ -1,10 +1,16 @@
 import logging
+import os
  
 # 配置日志器
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-fhandler = logging.FileHandler('livetalking.log', encoding="utf-8")  # 可以改为StreamHandler输出到控制台或多个Handler组合使用等。
+try:
+    fhandler = logging.FileHandler('livetalking.log', encoding="utf-8")
+except OSError:
+    # A bind-mounted workspace may contain a historical root-owned log file.
+    # Keep the service usable for the non-root container user in that case.
+    fhandler = logging.FileHandler('/tmp/livetalking.log', encoding="utf-8")
 fhandler.setFormatter(formatter)
 fhandler.setLevel(logging.INFO)
 logger.addHandler(fhandler)

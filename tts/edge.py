@@ -122,7 +122,8 @@ class EdgeTTS(BaseTTS):
     
     async def __main(self,voicename: str, text: str):
         try:
-            communicate = edge_tts.Communicate(text, voicename)
+            proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+            communicate = edge_tts.Communicate(text, voicename, proxy=proxy)
 
             #with open(OUTPUT_FILE, "wb") as file:
             first = True

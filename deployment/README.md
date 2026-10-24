@@ -1,5 +1,36 @@
 # workspace 部署
 
+## 迁移压缩包
+
+工作区迁移包 `livetalking-migration.tar.zst` 包含本项目（含 Git 历史）、角色 Avatar 数据、TTS 数据、Docker 镜像和 `deployment/secrets.env`。该归档未加密，包含可用 API 密钥；请通过受控渠道传输，并限制文件读取权限。若归档泄露，应立即轮换其中的密钥。
+
+目标服务器需要 Linux/amd64、Docker、NVIDIA Container Toolkit、支持镜像 CUDA 12.4 的 NVIDIA 驱动及可用 GPU 0，以及足够空间解压归档和导入镜像（建议至少 50GB 可用空间）。执行账号必须能够访问 Docker 守护进程。迁移包不包含 Mihomo/Clash 节点配置，也不包含代理服务本身。
+
+将归档放到目标服务器后执行：
+
+```bash
+mkdir -p ~/workspace/livetalking-migration
+tar --use-compress-program=unzstd -xf livetalking-migration.tar.zst -C ~/workspace/livetalking-migration
+cd ~/workspace/livetalking-migration
+chmod +x base.sh
+# 镜像内运行用户为 ym（UID/GID 1006）；赋予持久化数据写入权限：
+sudo chown -R 1006:1006 livetalking/data
+chmod 600 livetalking/deployment/secrets.env
+./base.sh
+```
+
+如果目标机访问 DeepSeek 需要 HTTP 代理，在启动前设置目标机可达的代理地址：
+
+```bash
+LIVETALKING_PROXY=http://127.0.0.1:7890 ./base.sh
+```
+
+`127.0.0.1:7890` 只是示例，必须替换为目标服务器上实际运行且可用的代理。未设置 `LIVETALKING_PROXY` 时容器直连外网；若网络不允许直连，DeepSeek 对话将不可用。启动后访问 `http://<目标服务器地址>:8020/index.html`。还需按原部署要求开放 TCP 8020 和 WebRTC 所需 UDP 流量。
+
+`base.sh` 会在本机没有 `livetalking:latest` 时从包内 `livetalking-image.tar` 导入镜像，然后调用 `deployment/start.sh`。如本机已有同名镜像且需要使用迁移包版本，先执行 `docker load -i livetalking-image.tar`。如容器已存在，部署脚本会启动已有容器；应用包内新镜像或更改代理、密钥时，先执行 `docker stop livetalking && docker rm livetalking`，再运行 `./base.sh`。数据目录不会被删除。
+
+容器使用 `unless-stopped` 在后台运行，不需要 `nohup`；Docker 守护进程应设为开机启动。关闭终端不会停止容器。如果代理本身来自 SSH 反向隧道，该隧道仍需单独保持运行。启动后用 `docker ps` 和 `docker logs --tail 100 livetalking` 检查健康与错误状态；检查镜像后可用 `nvidia-smi` 确认目标机 GPU/驱动，进一步执行 `docker run --rm --gpus device=0 --entrypoint nvidia-smi livetalking:latest` 验证容器 GPU 可见性。
+
 项目仓库为 https://github.com/canghaiX/livetalking ，原始代码来自 https://github.com/lipku/livetalking（保留为 `upstream`），部署目录为 `/home/ym/workspace/livetalking`。
 
 镜像 `livetalking:latest` 使用本机已存在的 `livetalking-main:local` 作为依赖基础（Python 3.11 / PyTorch 2.6 / CUDA 12.4），安装仓库 requirements，并将本次拉取的代码、Wav2Lip 模型和默认数字人打包到 `/opt/livetalking`。原仓库 Dockerfile 保留；本部署使用 `Dockerfile.workspace`。模型和 `wav2lip256_avatar1` 从服务器已有的 `/data/share/LiveTalking-main` 复制而来。
@@ -17,7 +48,7 @@ docker start livetalking
 
 浏览器访问 `http://222.30.145.22:8020/index.html`，点击开始连接。默认 TTS 配置为阿里云百炼 Qwen 实时合成，固定使用 Serena 普通话女声；在 `deployment/secrets.env` 设置 `DASHSCOPE_API_KEY` 并重建容器后启用。阿里云临时超时会以 Serena 重建会话并退避重试，不会切换 EdgeTTS、Piper 或其他声线；用户打断后停止重试。密钥留在服务器本地，不要提交到 Git。
 
-服务器网络代理由 `ym` 用户的 Mihomo 服务独立维护，配置文件位于 `/home/ym/.config/mihomo/config.yaml`，本地监听 `127.0.0.1:7890`，并通过 `systemd --user` 和 linger 开机启动。LiveTalking 容器固定使用该服务器代理，不依赖 VS Code、Codex 或本地电脑的 SSH 反向隧道。检查命令：`systemctl --user status mihomo.service`、`docker exec livetalking ...`。如果所有上游节点失效，需要更新该配置中的节点，不能改用 HTTP 80 代替 HTTPS 443。
+容器代理由启动时的 `LIVETALKING_PROXY` 指定，未设置则直连。当前服务器既有容器使用 `http://127.0.0.1:17897`，该地址不能直接沿用到新服务器。Mihomo 服务及订阅配置不随项目迁移；若上游节点失效，需要更新节点或使用目标服务器的其他可用出口，不能改用 HTTP 80 代替 HTTPS 443。
 
 TTS 会按语境转换数字读音，例如 `1950年` 读作“ 一九五零年”，`12306` 读作“ 一二三零六”；普通数量、日期、小数和百分数转换为中文数词。网页字幕和对话历史保留原始文本。音色与计费以[百炼官方说明](https://help.aliyun.com/zh/model-studio/qwen-tts-voice-list)为准。
 

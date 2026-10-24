@@ -4,69 +4,19 @@
 
 中文版 ｜ [English](./README-EN.md)
 
+## 当前铁路讲解数字人部署与迁移
 
-<p align="center">
-    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202-dfd.svg"></a>
-    <a href="https://github.com/lipku/LiveTalking/releases"><img src="https://img.shields.io/github/v/release/lipku/LiveTalking?color=ffa"></a>
-    <a href=""><img src="https://img.shields.io/badge/python-3.10+-aff.svg"></a>
-    <a href=""><img src="https://img.shields.io/badge/os-linux%2C%20win%2C%20mac-pink.svg"></a>
-    <a href="https://github.com/lipku/LiveTalking/graphs/contributors"><img src="https://img.shields.io/github/contributors/lipku/LiveTalking?color=c4f042&style=flat-square"></a>
-</p>
-<p align="center">
-<a href="https://trendshift.io/repositories/12565" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12565" alt="lipku%2FLiveTalking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</p>
+当前部署使用 Wav2Lip、DeepSeek 对话和阿里云 Serena 语音，默认监听 8020、使用 GPU 0。完整迁移包包含项目、Git 历史、角色数据和 `livetalking:latest` 镜像，解压后在项目同级运行：
 
+```bash
+./base.sh
+# 目标服务器需要代理时：
+LIVETALKING_PROXY=http://127.0.0.1:7890 ./base.sh
+```
 
-实时交互流式数字人引擎，实现音视频同步对话，已在业内获得广泛商用
-
-**效果演示**: [wav2lip](https://www.bilibili.com/video/BV1scwBeyELA/) | [ernerf](https://www.bilibili.com/video/BV1G1421z73r/) | [musetalk](https://www.bilibili.com/video/BV1bUwezvEnG/)
-
-国内镜像: [Gitee](https://gitee.com/lipku/LiveTalking) | [GitCode](https://gitcode.com/lipku/LiveTalking)
+脚本会自动导入尚未安装的镜像，容器以 `unless-stopped` 策略在后台运行，关闭终端无需另加 `nohup`。迁移包按本部署要求包含明文 API 密钥，应限制读取和传输范围。目标机依赖、解压命令、目录权限、代理配置和网页访问方式见 [部署与迁移说明](deployment/README.md)。下文保留上游通用安装说明。
 
 
-## ❤️赞助商
-
-> [想出现在这里？](mailto:lipku@foxmail.com)
-
-<details open>
-<summary>点击折叠</summary>
-
-<table>
-<tr>
-<td width="180"><a href="https://www.packyapi.ai/register?aff=4gqz"><img src="assets/partner/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>PackyCode 是一家稳定、高效的 API 中转服务商，一句话接入主流大模型。新用户首充立享折扣 + $1免费体验额度，多分组折扣低至 2 折起，提供专属Codex/Claude Code高速通道，点此<a href="https://www.packyapi.ai/register?aff=4gqz">链接</a>注册</td>
-</tr>
-</table>
-
-</details>
-
----
-
-## Features
-1. 支持多种数字人模型: ernerf、musetalk、wav2lip、Ultralight-Digital-Human
-2. 支持声音克隆
-3. 支持数字人说话被打断
-4. 支持全身视频拼接
-5. 支持 WebRTC、RTMP、虚拟摄像头输出
-6. 支持动作编排：不说话时播放自定义视频
-7. 支持多并发
-8. 支持自定义数字人形象
-9. 提供前端API接口对接
-
----
-
-## 使用场景
-
-LiveTalking 基于实时流式数字人技术，通过文本或语音驱动虚拟形象说话，结合 LLM 实现智能对话。适用于以下场景：
-
-| 场景 | 说明 |
-|------|------|
-| **虚拟主播/直播带货[LiveStream](https://github.com/lipku/livestream)** | 24 小时无人直播，通过 LLM 自动生成带货话术，配合动作编排实现自然表现  |
-| **AI 数字人客服** | 接入企业知识库，用户语音提问，数字人实时回答，支持打断重说 |
-| **在线教育/培训** | 教师数字分身录制课程，或通过 API 驱动数字人讲师实时授课 |
-| **智能语音助手** | 结合智能音箱或 APP，调用 `/human` 接口驱动数字人进行语音对话交互 |
-| **大屏讲解** | 数字人讲解员在展厅大屏、活动现场等场景进行内容讲解和互动 |
-| **短视频批量制作** | 通过 API 批量提交文案生成数字人出镜视频，无需真人拍摄，调用 `/human` + `/record` 接口 |
 
 **核心流程**：用户输入文字/音频 → LLM 生成回复（可选）→ TTS 合成语音 → 数字人实时口型同步 → 音视频推流输出
 
@@ -218,47 +168,4 @@ python app.py --transport webrtc --model wav2lip --avatar_id wav2lip256_avatar1
 - wav2lip256 推荐 RTX 3060 及以上
 - musetalk 推荐 RTX 3080Ti 及以上
 
----
 
-## 7. 商用版
-|维度|开源版 |商用版 |
-|---|---|---|
-|定位|开源社区版，Apache 2\.0 |商用付费版，面向需要高性能、可运营交付的客户|
-|核心目标|快速体验、二次开发、学习研究|开箱即用的商业交付：性能加速、自适应动作、实时语音互动|
-|技术栈|wav2lip / musetalk / ultralight 三款模型|在开源版基础上新增 wav2lipls 及全套增强能力|  
-
-更多详情 <https://doc.livetalking.ai/docs/service/>  
-
----
-
-## 8. 声明
-
-基于本项目开发并发布在B站、视频号、抖音等平台上的视频需带上 LiveTalking 水印和标识。
-
----
-## 引用
-
-如果本项目对您有帮助，期待您能给一个 Star⭐和引用
-
-```
-@software{livetalking,
-  author = {Hengzhong Li},
-  title = {LiveTalking: Real-Time Interactive Streaming Digital Human Framework},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/lipku/livetalking}
-}
-```
-
----
-
-| 社区 | 链接 |
-|------|------|
-| 知识星球 | <https://t.zsxq.com/7NMyO> |
-| 微信 | wxwubug (加群请备注) |
-| Telegram | <https://t.me/livetalking> |
-| Discord | <https://discord.gg/n5jSPCT3Uf> |
-| Email | lipku@foxmail.com |
-| 微信公众号 | 数字人技术 |
-
-<img src="./assets/qrcode-wechat.jpg" align="middle" />

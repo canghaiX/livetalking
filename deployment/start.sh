@@ -11,8 +11,15 @@ if docker container inspect livetalking >/dev/null 2>&1; then
     exit 0
 fi
 mkdir -p "$project_dir/data/record" "$project_dir/data/avatar_packages" "$project_dir/data/avatars" "$project_dir/data/tts"
-# Use the local HTTP proxy exposed on the server. This is the proxy path that
-# is currently authorized for outbound DeepSeek access on this network.
+proxy_args=(-e HTTP_PROXY= -e HTTPS_PROXY= -e http_proxy= -e https_proxy=)
+if [[ -n "${LIVETALKING_PROXY:-}" ]]; then
+    proxy_args=(
+        -e "HTTP_PROXY=$LIVETALKING_PROXY"
+        -e "HTTPS_PROXY=$LIVETALKING_PROXY"
+        -e "http_proxy=$LIVETALKING_PROXY"
+        -e "https_proxy=$LIVETALKING_PROXY"
+    )
+fi
 docker run -d \
     --name livetalking \
     --gpus device=0 \
@@ -21,13 +28,10 @@ docker run -d \
     --init \
     --shm-size 1g \
     --env-file "$deployment_dir/secrets.env" \
-    -e HTTP_PROXY=http://127.0.0.1:17897 \
-    -e HTTPS_PROXY=http://127.0.0.1:17897 \
-    -e http_proxy=http://127.0.0.1:17897 \
-    -e https_proxy=http://127.0.0.1:17897 \
     -e ALL_PROXY= \
     -e all_proxy= \
     -e NO_PROXY=localhost,127.0.0.1,::1 \
+    "${proxy_args[@]}" \
     --log-opt max-size=20m --log-opt max-file=3 \
     -e CUDA_VISIBLE_DEVICES=0 \
     -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
